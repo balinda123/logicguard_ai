@@ -49,3 +49,4 @@ pb_data/
 
 # Tailscale
 .tailscale*
+./CONSTANT.ts
