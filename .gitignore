@@ -7,17 +7,7 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Dependencies
 node_modules
-.pnp
-.pnp.js
-
-# Testing
-coverage
-*.lcov
-.nyc_output
-
-# Production
 dist
 dist-ssr
 *.local
@@ -32,21 +22,4 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# OS generated files
-Thumbs.db
-.DS_Store
-
-# PocketBase data
-pb_data/
-
-# Tailscale
-.tailscale*
 ./CONSTANT.ts
