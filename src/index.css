@@ -168,3 +168,7 @@
 .animate-slide-in {
   animation: slide-in-left 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
+
+.overflow-y-auto {
+  overflow-y: auto;
+}

@@ -1,0 +1,10 @@
+{
+  "name": "logicguard-sidecar",
+  "version": "1.0.0",
+  "description": "LogicGuard AI 浏览器控制 Sidecar - 通过 CDP 协议接管 Chrome",
+  "main": "index.js",
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "^1.44.0"
+  }
+}

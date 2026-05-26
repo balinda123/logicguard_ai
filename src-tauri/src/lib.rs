@@ -1,3 +1,6 @@
+mod llm;
+mod browser;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -11,6 +14,24 @@ pub fn run() {
       }
       Ok(())
     })
+    .plugin(tauri_plugin_shell::init())
+    .plugin(tauri_plugin_store::Builder::default().build())
+    .invoke_handler(tauri::generate_handler![
+      // LLM 大模型相关命令
+      llm::test_llm_connection,
+      llm::plan_task,
+      llm::generate_action,
+      llm::heal_step,
+      // 浏览器 CDP 控制命令
+      browser::browser_get_snapshot,
+      browser::browser_click,
+      browser::browser_type,
+      browser::browser_navigate,
+      browser::browser_assert,
+      browser::browser_check_connection,
+      browser::launch_chrome_cdp,
+      browser::get_chrome_path,
+    ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
