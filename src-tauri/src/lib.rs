@@ -25,7 +25,9 @@ pub fn run() {
       // 浏览器 CDP 控制命令
       browser::browser_get_snapshot,
       browser::browser_click,
+      browser::browser_hover,
       browser::browser_type,
+      browser::browser_press,
       browser::browser_navigate,
       browser::browser_assert,
       browser::browser_check_connection,

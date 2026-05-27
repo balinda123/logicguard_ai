@@ -44,9 +44,10 @@ export function compressDomForLlm(elements: InteractiveElement[]): string {
     if (traits.length > 0) {
       line += ` ${traits.join(' ')}`;
     }
-    
-    // 追加选择器，大模型将以此选择器来指示操作
-    line += ` | sel: "${el.selector}"`;
+
+    if (el.x !== undefined && el.y !== undefined) {
+      line += ` [x:${el.x}, y:${el.y}]`;
+    }
 
     return line;
   });

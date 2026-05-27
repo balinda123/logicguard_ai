@@ -72,6 +72,7 @@ export interface PlannerResult {
 
 export async function planTask(
   userIntent: string,
+  context: string = '',
   onProgress?: (status: string) => void
 ): Promise<PlannerResult> {
   const config = getLlmConfig();
@@ -82,6 +83,7 @@ export async function planTask(
   try {
     raw = await invoke<string>('plan_task', {
       userIntent,
+      context,
       config,
     });
   } catch (e) {
@@ -91,9 +93,7 @@ export async function planTask(
   onProgress?.('📋 正在解析执行计划...');
 
   try {
-    // Strip potential markdown code fences
-    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed: PlannerResult = JSON.parse(cleaned);
+    const parsed: PlannerResult = extractJson(raw);
 
     // Ensure all steps are in 'pending' status
     parsed.steps = parsed.steps.map((s, i) => ({
@@ -105,6 +105,49 @@ export async function planTask(
     return parsed;
   } catch {
     throw new Error(`AI 返回格式解析失败，原始内容：${raw.slice(0, 200)}`);
+  }
+}
+
+// =============================================
+// JSON Parser Helper
+// =============================================
+
+function extractJson(raw: string): any {
+  console.log(raw,'rawllm');
+  
+  try {
+    // 1. Try standard replace first
+    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    return JSON.parse(cleaned);
+  } catch (e) {
+    // 2. Fallback: Find first { or [ and last } or ]
+    const firstBrace = raw.indexOf('{');
+    const lastBrace = raw.lastIndexOf('}');
+    const firstBracket = raw.indexOf('[');
+    const lastBracket = raw.lastIndexOf(']');
+    
+    let startIdx = -1;
+    let endIdx = -1;
+
+    // Use object braces if they exist and are valid, otherwise arrays
+    if (firstBrace !== -1 && lastBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+      startIdx = firstBrace;
+      endIdx = lastBrace;
+    } else if (firstBracket !== -1 && lastBracket !== -1) {
+      startIdx = firstBracket;
+      endIdx = lastBracket;
+    }
+
+    if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
+      const jsonStr = raw.substring(startIdx, endIdx + 1);
+      try {
+        return JSON.parse(jsonStr);
+      } catch (innerE) {
+        throw new Error(`无法从 LLM 返回内容中提取有效的 JSON: ${raw}`);
+      }
+    }
+    
+    throw new Error(`LLM 未返回任何 JSON 结构: ${raw}`);
   }
 }
 
@@ -124,8 +167,7 @@ export async function generateAction(
     config,
   });
 
-  const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  return JSON.parse(cleaned) as GeneratorOutput;
+  return extractJson(raw) as GeneratorOutput;
 }
 
 // =============================================
@@ -156,6 +198,6 @@ export async function healStep(
     config,
   });
 
-  const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  return JSON.parse(cleaned) as HealerResult;
+  return extractJson(raw) as HealerResult;
 }
+

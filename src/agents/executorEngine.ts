@@ -103,15 +103,32 @@ export async function executeTaskLoop(
         }
 
         // 5. 在真实的 CDP 浏览器中执行动作
+        // 映射 target 为实际的 selector
+        let targetSelector = String(actionPlan.target || '');
+        if (/^#?\d+$/.test(targetSelector)) {
+          const id = parseInt(targetSelector.replace('#', ''), 10);
+          const el = pageContext.interactiveElements.find(e => e.index === id);
+          if (el) {
+            targetSelector = el.selector;
+            onHealerLog({
+              timestamp: new Date().toLocaleTimeString(),
+              stepId: step.stepId,
+              strategy: 'retry',
+              message: `🔍 [E0] 映射元素 ID #${id} 为选择器: ${targetSelector}`,
+              resolved: true
+            });
+          }
+        }
+
         onHealerLog({
           timestamp: new Date().toLocaleTimeString(),
           stepId: step.stepId,
           strategy: 'retry',
-          message: `🚀 [E1] 正在浏览器中执行动作：${actionPlan.action} -> ${actionPlan.target}`,
+          message: `🚀 [E1] 正在浏览器中执行动作：${actionPlan.action} -> ${targetSelector}`,
           resolved: false
         });
 
-        const execResult = await executeBrowserAction(actionPlan.action, actionPlan.target, actionPlan.value);
+        const execResult = await executeBrowserAction(actionPlan.action, targetSelector, actionPlan.value);
         
         // 执行成功
         stepSuccess = true;
@@ -126,8 +143,8 @@ export async function executeTaskLoop(
           resolved: true
         });
 
-        // 稍微等待页面反应
-        await new Promise(r => setTimeout(r, 1000));
+        // 稍微等待页面反应（企业级 SPA 路由跳转和渲染通常较慢）
+        await new Promise(r => setTimeout(r, 2500));
         
         // 获取执行后的新状态
         const newPageContext = await getPageSnapshot();

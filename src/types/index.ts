@@ -23,6 +23,8 @@ export interface InteractiveElement {
   role?: string;
   disabled?: boolean;
   selector: string;
+  x?: number;
+  y?: number;
 }
 
 export interface PageContext {
@@ -32,7 +34,7 @@ export interface PageContext {
 }
 
 export interface GeneratorOutput {
-  action: 'click' | 'type' | 'navigate' | 'scroll' | 'wait' | 'select';
+  action: 'click' | 'type' | 'press' | 'navigate' | 'scroll' | 'wait' | 'select' | 'hover';
   target: string;
   value?: string;
   reason: string;

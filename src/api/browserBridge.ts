@@ -90,6 +90,16 @@ export async function browserClick(selector: string, timeout = 5000): Promise<Br
   });
 }
 
+/**
+ * 鼠标悬停
+ */
+export async function browserHover(selector: string): Promise<BrowserActionResult> {
+  return await invoke<BrowserActionResult>('browser_hover', {
+    selector,
+    port: CDP_PORT,
+  });
+}
+
 export async function browserType(selector: string, value: string): Promise<BrowserActionResult> {
   return await invoke<BrowserActionResult>('browser_type', {
     selector,
@@ -118,6 +128,14 @@ export async function browserAssert(selector: string, contains?: string): Promis
 //    AI 生成的 GeneratorOutput 告诉我们 action 是 click/type/navigate...
 //    这个函数负责路由到正确的操作
 
+export async function browserPress(selector: string, key: string): Promise<BrowserActionResult> {
+  return await invoke<BrowserActionResult>('browser_press', {
+    selector,
+    key,
+    port: CDP_PORT,
+  });
+}
+
 export async function executeBrowserAction(
   action: string,
   target: string,
@@ -126,8 +144,12 @@ export async function executeBrowserAction(
   switch (action) {
     case 'click':
       return await browserClick(target);
+    case 'hover':
+      return await browserHover(target);
     case 'type':
       return await browserType(target, value ?? '');
+    case 'press':
+      return await browserPress(target, value ?? 'Enter');
     case 'navigate':
       return await browserNavigate(target);
     case 'assert':

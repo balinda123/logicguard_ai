@@ -277,8 +277,8 @@ pub async fn test_llm_connection(config: LlmConfig) -> Result<String, String> {
 
 /// Main planning command: converts user intent to structured steps
 #[command]
-pub async fn plan_task(user_intent: String, config: LlmConfig) -> Result<String, String> {
-    let system_prompt = build_planner_prompt(&user_intent);
+pub async fn plan_task(user_intent: String, context: String, config: LlmConfig) -> Result<String, String> {
+    let system_prompt = build_planner_prompt(&user_intent, &context);
     route_llm(&system_prompt, &config).await
 }
 
@@ -309,54 +309,69 @@ pub async fn heal_step(
 // Prompt Builders
 // =============================================
 
-fn build_planner_prompt(user_intent: &str) -> String {
+fn build_planner_prompt(user_intent: &str, context: &str) -> String {
     format!(
-        r#"You are LogicGuard AI's Planner agent. Your job is to break down a user's automation intent into precise, executable steps for a web browser automation system.
+        r#"你是 LogicGuard AI 的 Planner (计划制定) 代理。你的任务是将用户的自动化意图拆解为浏览器自动化系统可执行的精确步骤。
 
-User Intent: "{}"
+当前浏览器上下文（状态）:
+{}
 
-Output ONLY a valid JSON object in this exact format:
+用户意图: "{}"
+
+重要指示: 如果“当前浏览器上下文”显示用户【已经】在目标网站或目标页面上，绝对不要生成导航到首页或登录的步骤。直接从当前页面开始规划后续操作。
+
+请只输出一个符合以下确切格式的合法 JSON 对象：
 {{
   "planId": "plan_<timestamp>",
-  "task": "<summary of the task>",
-  "estimatedTime": <estimated seconds as integer>,
+  "task": "<任务的简短总结>",
+  "estimatedTime": <预估秒数，整数>,
   "steps": [
     {{
       "stepId": 1,
-      "description": "<clear action description in Chinese>",
-      "expectedAction": "<one of: click|type|navigate|scroll|wait|assert|select>",
-      "successCriteria": "<what must be true after this step succeeds>",
+      "description": "<清晰的中文操作步骤描述>",
+      "expectedAction": "<从以下选项中选择: click|type|navigate|scroll|wait|assert|select|hover>",
+      "successCriteria": "<执行此步后，什么条件为真则代表成功>",
       "status": "pending"
     }}
   ]
 }}
 
-Rules:
-- Break into 3-8 steps maximum
-- Use Chinese for descriptions
-- Be specific about what element to interact with
-- Steps must be sequential and logically ordered
-- For login flows, include SSO/credential steps"#,
+规则:
+- 最多拆分为 3 到 8 个步骤
+- 描述必须使用中文
+- 明确指出需要交互的元素是什么
+- 步骤必须是顺序执行、合乎逻辑的
+- 对于需要展开下拉菜单的操作，必须先生成一个使用 hover 动作悬停在父级菜单上的步骤，等待其展开后再在下一步执行 click。
+- 绝对不要根据元素的文字去臆测它在页面上的位置布局（例如不要写“在左侧菜单”、“在顶部”等），只用元素的文本内容来描述即可。
+- 对于需要登录的流程，必须包含 SSO/凭证输入步骤（除非上下文显示已登录）"#,
+        context,
         user_intent
     )
 }
 
 fn build_generator_prompt(step_description: &str, dom_context: &str) -> String {
     format!(
-        r#"You are LogicGuard AI's Generator agent. Given a step description and current page DOM context, output the exact browser action to take.
+        r#"你是 LogicGuard AI 的 Generator (动作生成) 代理。请根据给定的步骤描述和当前页面的 DOM 上下文，输出确切的浏览器执行动作。
 
-Step to execute: "{}"
+当前需要执行的步骤: "{}"
 
-Current page interactive elements (Accessibility Tree):
+当前页面可交互元素列表 (Accessibility Tree):
 {}
 
-Output ONLY a valid JSON object:
+重要提示: 元素后面带有 [x:坐标, y:坐标] 表示其在页面上的物理绝对位置。
+如果你需要在一堆同名元素（比如多个“搜索”按钮）中做选择：
+1. 观察执行步骤中提到的参照物（比如“在某个输入框后面”）。
+2. 找到该参照物的 [x, y] 坐标。
+3. 寻找与参照物坐标最接近（通常 Y 轴相近代表在同一行）的目标按钮。
+如果没有同名冲突，直接通过文字特征寻找即可，不要过度依赖坐标。
+
+请只输出一个符合以下确切格式的合法 JSON 对象：
 {{
-  "action": "<one of: click|type|navigate|scroll|wait|select>",
-  "target": "<CSS selector or XPath of the element>",
-  "value": "<text to type or URL to navigate to, if applicable>",
-  "reason": "<one sentence explaining why this element was chosen>",
-  "confidence": <0.0 to 1.0>
+  "action": "<从以下选项中选择: click|type|navigate|scroll|wait|select|hover>",
+  "target": "<上方列表中目标元素的序号数字，例如 12。如果是 navigate 动作，则填 URL>",
+  "value": "<需要输入的文本值，如果有的话>",
+  "reason": "<一句话用中文解释为什么选择这个元素>",
+  "confidence": <0.0 到 1.0 的置信度>
 }}"#,
         step_description, dom_context
     )
@@ -364,22 +379,22 @@ Output ONLY a valid JSON object:
 
 fn build_healer_prompt(step: &str, failure: &str, dom: &str) -> String {
     format!(
-        r#"You are LogicGuard AI's Healer agent. A browser automation step has failed and you must diagnose and provide an alternative approach.
+        r#"你是 LogicGuard AI 的 Healer (自愈诊断) 代理。某一个浏览器自动化步骤执行失败了，你必须进行诊断并提供备用的替代方案。
 
-Failed step: "{}"
-Failure reason: "{}"
+执行失败的步骤: "{}"
+失败原因: "{}"
 
-Current page interactive elements after failure:
+失败后当前页面的可交互元素列表 (带有物理空间坐标 [x, y]):
 {}
 
-Analyze why it failed and output a recovery JSON:
+请分析失败原因（如果是因为点错了同名元素，请结合目标元素和其旁边参照物的 [x,y] 坐标重新推理），并输出一个包含恢复策略的合法 JSON 对象：
 {{
-  "diagnosis": "<why the step failed>",
-  "strategy": "<one of: retry|alt_selector|re_perceive|ai_diagnose|skip>",
-  "action": "<one of: click|type|navigate|scroll|wait|select>",
-  "target": "<new CSS selector or XPath to try>",
-  "value": "<value if needed>",
-  "confidence": <0.0 to 1.0>,
+  "diagnosis": "<用中文解释为什么该步骤会失败>",
+  "strategy": "<从以下选项中选择: retry|alt_selector|re_perceive|ai_diagnose|skip>",
+  "action": "<从以下选项中选择: click|type|navigate|scroll|wait|select|hover>",
+  "target": "<尝试操作的新元素的序号数字，例如 15。如果是 navigate，则填 URL>",
+  "value": "<需要输入的文本值，如果有的话>",
+  "confidence": <0.0 到 1.0 的置信度>,
   "resolved": false
 }}"#,
         step, failure, dom

@@ -93,7 +93,8 @@ async function main() {
       return u && u !== 'about:blank' 
         && !u.startsWith('chrome-extension://') 
         && !u.startsWith('devtools://')
-        && !u.startsWith('chrome://');
+        && !u.startsWith('chrome://')
+        && !u.startsWith('chrome-error://');
     });
     
     // 如果没有找到有效页面，就退回使用最后一个页面
@@ -121,31 +122,48 @@ async function main() {
           try {
             // 在每个 frame 里执行提取逻辑
             const elements = await frame.$$eval(
-              // 选择所有"可以点击/输入"的元素
+              // 选择所有"可以点击/输入"的元素，包括 Vue/React 常用的非标准菜单标签
               'a[href], button, input:not([type="hidden"]), select, textarea, ' +
               '[role="button"], [role="link"], [role="menuitem"], [role="tab"], ' +
-              '[tabindex]:not([tabindex="-1"])',
+              '[tabindex]:not([tabindex="-1"]), ' +
+              'li, [class*="menu"], [class*="nav"], [class*="btn"], [class*="tab"]',
               (els) => {
-                return els.slice(0, 100).map((el) => {
-                  let selector = '';
-                  if (el.id) {
-                    selector = `#${el.id}`;
-                  } else if (el.getAttribute('data-testid')) {
-                    selector = `[data-testid="${el.getAttribute('data-testid')}"]`;
-                  } else if (el.name) {
-                    selector = `${el.tagName.toLowerCase()}[name="${el.name}"]`;
-                  } else if (el.getAttribute('aria-label')) {
-                    selector = `[aria-label="${el.getAttribute('aria-label')}"]`;
-                  } else {
-                    const text = (el.textContent || '').trim().slice(0, 20);
-                    selector = text
-                      ? `${el.tagName.toLowerCase()}:has-text("${text}")`
-                      : `${el.tagName.toLowerCase()}:nth-of-type(1)`; // 简化 fallback
+                const results = [];
+                for (const el of els) {
+                  // 过滤掉不可见且没文本的无效容器
+                  let text = (el.textContent || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+                  
+                  // 如果按钮没有文字（例如纯图标按钮），尝试从 HTML 结构中提取图标语义
+                  if (!text && !el.placeholder && !el.getAttribute('aria-label')) {
+                    const html = el.outerHTML.toLowerCase();
+                    if (html.includes('search')) text = 'icon:search';
+                    else if (html.includes('close')) text = 'icon:close';
+                    else if (html.includes('add') || html.includes('plus')) text = 'icon:add';
+                    else if (html.includes('edit')) text = 'icon:edit';
+                    else if (html.includes('delete') || html.includes('trash')) text = 'icon:delete';
+                    else if (html.includes('download')) text = 'icon:download';
+                    else if (html.includes('upload')) text = 'icon:upload';
+                    else continue; // 如果既没文字也没有已知图标特征，则丢弃
                   }
 
-                  return {
+                  // 注入唯一标识符
+                  let lgId = el.getAttribute('data-lg-id');
+                  if (!lgId) {
+                    lgId = `lg-${Math.random().toString(36).substring(2, 10)}`;
+                    el.setAttribute('data-lg-id', lgId);
+                  }
+                  
+                  const selector = `[data-lg-id="${lgId}"]`;
+
+                  const rect = el.getBoundingClientRect();
+                  
+                  // 过滤掉不可见、或者是占据大半个屏幕的布局容器 (防止 Playwright 点击其中心时误触其他按钮)
+                  if (rect.width === 0 || rect.height === 0) continue;
+                  if (rect.width > window.innerWidth * 0.7 || rect.height > window.innerHeight * 0.7) continue;
+
+                  results.push({
                     tag: el.tagName,
-                    text: (el.textContent || el.value || '').trim().slice(0, 80),
+                    text,
                     type: el.type || undefined,
                     placeholder: el.placeholder || undefined,
                     role: el.getAttribute('role') || undefined,
@@ -153,14 +171,19 @@ async function main() {
                     disabled: el.disabled || false,
                     selector,
                     visible: el.offsetParent !== null,
-                  };
-                });
+                    x: Math.round(rect.x),
+                    y: Math.round(rect.y),
+                  });
+                }
+                return results;
               }
             );
 
             // 给所有提取到的元素分配全局唯一的 index
             for (const el of elements) {
-              if (!el.visible && !el.type) continue; // 稍微过滤掉一些不可见且无意义的元素
+              // 放宽可见性过滤：如果元素不可见，但它是带有文本的按钮/链接，我们依然保留它。
+              // 这样大模型就能看到隐藏在下拉菜单里的子页面（例如花名册）
+              if (!el.visible && !el.type && !el.text) continue; 
               el.index = globalIndex++;
               allElements.push(el);
             }
@@ -179,28 +202,143 @@ async function main() {
         break;
       }
 
+      // --- 通用方法：在主页面及所有 iframe 中查找并操作元素 ---
+      async function performInAnyFrame(page, action, selector, value) {
+        // 定义视觉反馈效果的注入脚本
+        const visualCueScript = (node) => {
+          try {
+            const rect = node.getBoundingClientRect();
+            // 如果元素没有尺寸，尝试让它临时显示出来，或者取父元素尺寸
+            if (rect.width === 0 || rect.height === 0) return;
+            
+            const cursor = document.createElement('div');
+            cursor.style.position = 'fixed';
+            cursor.style.left = (rect.left + rect.width / 2 - 15) + 'px';
+            cursor.style.top = (rect.top + rect.height / 2 - 15) + 'px';
+            cursor.style.width = '30px';
+            cursor.style.height = '30px';
+            cursor.style.backgroundColor = 'rgba(239, 68, 68, 0.4)';
+            cursor.style.border = '2px solid rgb(239, 68, 68)';
+            cursor.style.borderRadius = '50%';
+            cursor.style.zIndex = '2147483647'; // max z-index
+            cursor.style.pointerEvents = 'none';
+            cursor.style.transition = 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+            cursor.style.boxShadow = '0 0 15px rgba(239, 68, 68, 0.6)';
+            
+            // 添加一个文字提示
+            const label = document.createElement('span');
+            label.innerText = '🤖 AI 点击';
+            label.style.position = 'absolute';
+            label.style.top = '-25px';
+            label.style.left = '-20px';
+            label.style.backgroundColor = '#1e293b';
+            label.style.color = '#fff';
+            label.style.padding = '2px 6px';
+            label.style.borderRadius = '4px';
+            label.style.fontSize = '12px';
+            label.style.fontWeight = 'bold';
+            label.style.whiteSpace = 'nowrap';
+            cursor.appendChild(label);
+
+            document.body.appendChild(cursor);
+            
+            // 模拟点击的缩放动画
+            setTimeout(() => {
+              cursor.style.transform = 'scale(0.3)';
+              cursor.style.backgroundColor = 'rgba(239, 68, 68, 0.9)';
+            }, 50);
+            
+            // 动画结束后移除
+            setTimeout(() => cursor.remove(), 1500);
+          } catch(e) {}
+        };
+
+        try {
+          const el = page.locator(selector).first();
+          // 改为 attached，只要元素存在于 DOM 就可以操作，不强制要求可见
+          await el.waitFor({ state: 'attached', timeout: 2000 });
+          
+          // 执行视觉反馈
+          await el.evaluate(visualCueScript).catch(() => {});
+          
+          // 执行真实动作，传入 force: true 强制点击（即使它是被隐藏的下拉菜单项）
+          if (action === 'click') {
+            await el.click({ force: true });
+          } else if (action === 'hover') {
+            await el.hover({ force: true });
+          } else if (action === 'fill') {
+            await el.fill(value, { force: true });
+          } else if (action === 'press') {
+            await el.press(value);
+          } else if (action === 'selectOption') {
+            await el.selectOption(value, { force: true });
+          }
+          return true;
+        } catch (e) {
+          for (const frame of page.frames()) {
+            if (frame === page.mainFrame()) continue;
+            try {
+              const el = frame.locator(selector).first();
+              await el.waitFor({ state: 'attached', timeout: 500 });
+              
+              await el.evaluate(visualCueScript).catch(() => {});
+              
+              if (action === 'click') {
+                await el.click({ force: true });
+              } else if (action === 'hover') {
+                await el.hover({ force: true });
+              } else if (action === 'fill') {
+                await el.fill(value, { force: true });
+              } else if (action === 'press') {
+                await el.press(value);
+              } else if (action === 'selectOption') {
+                await el.selectOption(value, { force: true });
+              }
+              return true;
+            } catch (err) {
+              // 继续下一个 frame
+            }
+          }
+        }
+        throw new Error(`在所有框架中均未找到元素: ${selector}`);
+      }
+
       // 🖱️ 点击元素
       case 'click': {
-        const { selector, timeout = '5000' } = args;
+        const { selector } = args;
         if (!selector) { fail('缺少参数: --selector'); return; }
 
-        // 📚 waitForSelector 等待元素出现再点击，比直接 click 更稳定
-        //    这也是 Healer 机制的基础：如果等待超时，我们捕获错误并报告给 AI
-        await page.waitForSelector(selector, { timeout: parseInt(timeout) });
-        await page.click(selector);
+        await performInAnyFrame(page, 'click', selector);
         ok({ action: 'click', selector, message: '点击成功' });
+        break;
+      }
+      // 🖱️ 悬停元素
+      case 'hover': {
+        const { selector } = args;
+        if (!selector) { fail('缺少参数: --selector'); return; }
+
+        await performInAnyFrame(page, 'hover', selector);
+        ok({ action: 'hover', selector, message: '悬停成功' });
         break;
       }
 
       // ⌨️ 在输入框里输入文字
       case 'type': {
-        const { selector, value = '', timeout = '5000' } = args;
+        const { selector, value = '' } = args;
         if (!selector) { fail('缺少参数: --selector'); return; }
 
-        await page.waitForSelector(selector, { timeout: parseInt(timeout) });
-        // 先清空再输入，避免追加到已有内容
-        await page.fill(selector, value);
+        await performInAnyFrame(page, 'fill', selector, value);
         ok({ action: 'type', selector, value, message: '输入成功' });
+        break;
+      }
+      
+      // ⌨️ 发送按键 (如 Enter)
+      case 'press': {
+        const { selector, key } = args;
+        if (!selector || !key) { fail('缺少参数: --selector 或 --key'); return; }
+
+        await performInAnyFrame(page, 'press', selector, key);
+        ok({ action: 'press', selector, key, message: '按键发送成功' });
         break;
       }
 
@@ -222,8 +360,7 @@ async function main() {
         const { selector, value } = args;
         if (!selector || !value) { fail('缺少参数: --selector 或 --value'); return; }
 
-        await page.waitForSelector(selector);
-        await page.selectOption(selector, { label: value });
+        await performInAnyFrame(page, 'selectOption', selector, { label: value });
         ok({ action: 'select', selector, value, message: '选择成功' });
         break;
       }

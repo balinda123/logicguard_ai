@@ -19,9 +19,7 @@ import { getPageSnapshot } from "../api/browserBridge";
 import { executeTaskLoop } from "../agents/executorEngine";
 
 export const Dashboard: React.FC = () => {
-  const [taskInput, setTaskInput] = useState(
-    "自动登录OA系统并审批我的下属张三的发票报销",
-  );
+  const [taskInput, setTaskInput] = useState("");
   const [matchedTemplate, setMatchedTemplate] = useState(defaultTemplates[0]);
   const [planningStatus, setPlanningStatus] = useState<string | null>(null);
   const [steps, setSteps] = useState<PlanStep[]>([]);
@@ -40,6 +38,29 @@ export const Dashboard: React.FC = () => {
   // Panel visibility toggles
   const [showSandbox, setShowSandbox] = useState(true);
   const [showHealer, setShowHealer] = useState(true);
+  const [healerHeight, setHealerHeight] = useState(192); // default height 192px
+
+  const handleHealerDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = healerHeight;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      // Dragging up means a negative delta Y, but we want height to increase
+      const deltaY = startY - moveEvent.clientY;
+      setHealerHeight(Math.max(100, Math.min(800, startHeight + deltaY)));
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "";
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    document.body.style.cursor = "row-resize";
+  };
 
   // Template matching algorithm based on user input
   useEffect(() => {
@@ -85,8 +106,20 @@ export const Dashboard: React.FC = () => {
       if (isConfigured()) {
         // ── Real LLM Path ──
         setUsingRealLlm(true);
+
+        let contextStr =
+          "Assume the user is starting from scratch and needs to open the target website.";
+        setPlanningStatus("🔍 正在获取当前浏览器页面状态...");
+        try {
+          const snapshot = await getPageSnapshot();
+          setCurrentPage(snapshot);
+          contextStr = `The user is ALREADY on this page:\nURL: ${snapshot.url}\nTitle: ${snapshot.title}\n\nDO NOT generate a step to navigate to the homepage or login if the user is already on the correct site. Directly generate steps starting from this page.`;
+        } catch (e) {
+          console.warn("Could not get initial snapshot before planning", e);
+        }
+
         setPlanningStatus("🧠 正在连接 AI 模型...");
-        const result = await planTask(taskInput, (status) => {
+        const result = await planTask(taskInput, contextStr, (status) => {
           setPlanningStatus(status);
         });
         plannedSteps = result.steps;
@@ -105,22 +138,32 @@ export const Dashboard: React.FC = () => {
 
       // Trigger execution (Phase 3 Real Execution vs Simulated Execution)
       setIsExecuting(true);
-      
+
       if (isConfigured()) {
         await executeTaskLoop(
           plannedSteps,
-          (updatedStep) => setSteps((prev) => prev.map((s) => (s.stepId === updatedStep.stepId ? updatedStep : s))),
+          (updatedStep) =>
+            setSteps((prev) =>
+              prev.map((s) =>
+                s.stepId === updatedStep.stepId ? updatedStep : s,
+              ),
+            ),
           (log) => setHealerLogs((prev) => [...prev, log]),
-          (page) => setCurrentPage(page)
+          (page) => setCurrentPage(page),
         );
       } else {
         const { runStepSimulation } = await import("../agents/simulatedEngine");
         for (const step of plannedSteps) {
           await runStepSimulation(
             step,
-            (updatedStep) => setSteps((prev) => prev.map((s) => (s.stepId === updatedStep.stepId ? updatedStep : s))),
+            (updatedStep) =>
+              setSteps((prev) =>
+                prev.map((s) =>
+                  s.stepId === updatedStep.stepId ? updatedStep : s,
+                ),
+              ),
             (log) => setHealerLogs((prev) => [...prev, log]),
-            (page) => setCurrentPage(page)
+            (page) => setCurrentPage(page),
           );
         }
       }
@@ -147,7 +190,9 @@ export const Dashboard: React.FC = () => {
       {/* Upper Area: Split Panel */}
       <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden min-h-0 min-w-0">
         {/* Left Side: Setup & Steps Control */}
-        <div className={`w-full ${showSandbox ? 'lg:w-[380px] lg:border-r' : 'lg:flex-1'} shrink-0 border-b lg:border-b-0 border-border flex flex-col lg:h-full lg:overflow-y-auto p-6 space-y-6 transition-all duration-300`}>
+        <div
+          className={`w-full ${showSandbox ? "lg:w-[380px] lg:border-r" : "lg:flex-1"} shrink-0 border-b lg:border-b-0 border-border flex flex-col lg:h-full lg:overflow-y-auto p-6 space-y-6 transition-all duration-300`}
+        >
           <div className="flex items-start justify-between">
             <div>
               <h3 className="text-sm font-bold text-text-primary mb-1">
@@ -157,20 +202,20 @@ export const Dashboard: React.FC = () => {
                 使用自然语言输入，系统将自动分解并适配最佳穿透方案
               </p>
             </div>
-            
+
             {/* Panel Toggles */}
             <div className="flex items-center gap-1.5 shrink-0 ml-4 bg-surface-2 p-1 rounded-lg border border-border">
               <button
                 onClick={() => setShowSandbox(!showSandbox)}
                 title="切换感知层沙盒视图"
-                className={`p-1.5 rounded-md transition-colors ${showSandbox ? 'bg-brand-500/10 text-brand-400' : 'text-text-muted hover:text-text-primary hover:bg-surface-3'}`}
+                className={`p-1.5 rounded-md transition-colors ${showSandbox ? "bg-brand-500/10 text-brand-400" : "text-text-muted hover:text-text-primary hover:bg-surface-3"}`}
               >
                 <PanelRight className="w-3.5 h-3.5" />
               </button>
               <button
                 onClick={() => setShowHealer(!showHealer)}
                 title="切换 Healer 诊断中心"
-                className={`p-1.5 rounded-md transition-colors ${showHealer ? 'bg-brand-500/10 text-brand-400' : 'text-text-muted hover:text-text-primary hover:bg-surface-3'}`}
+                className={`p-1.5 rounded-md transition-colors ${showHealer ? "bg-brand-500/10 text-brand-400" : "text-text-muted hover:text-text-primary hover:bg-surface-3"}`}
               >
                 <PanelBottom className="w-3.5 h-3.5" />
               </button>
@@ -260,9 +305,9 @@ export const Dashboard: React.FC = () => {
                 <h4 className="text-xs font-bold text-text-primary">
                   Planner 任务分步计划
                 </h4>
-                <span className="text-[10px] text-brand-400 font-medium">
+                {/* <span className="text-[10px] text-brand-400 font-medium">
                   100% 本地 7B 模型生成
-                </span>
+                </span> */}
               </div>
               <div className="space-y-2">
                 {steps.map((step) => (
@@ -342,14 +387,18 @@ export const Dashboard: React.FC = () => {
 
         {/* Right Side / Bottom Area Container */}
         <div className="flex-1 min-w-0 flex flex-col h-full bg-transparent overflow-hidden">
-          
           {/* Sandbox Area */}
           {showSandbox && (
             <div className="flex-1 min-h-0 flex flex-col p-6 space-y-4 overflow-y-auto">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <h3 className="text-sm font-bold text-text-primary mb-1">页面结构化感知层 (Accessibility Sandbox)</h3>
-                  <p className="text-xs text-text-muted">通过 Chrome CDP 实时抓取可交互 DOM 元素，无需截图，节省 90% AI Token</p>
+                  <h3 className="text-sm font-bold text-text-primary mb-1">
+                    页面结构化感知层 (Accessibility Sandbox)
+                  </h3>
+                  <p className="text-xs text-text-muted">
+                    通过 Chrome CDP 实时抓取可交互 DOM 元素，无需截图，节省 90%
+                    AI Token
+                  </p>
                 </div>
                 <button
                   onClick={handleFetchSnapshot}
@@ -357,7 +406,9 @@ export const Dashboard: React.FC = () => {
                   title="从已打开的 Chrome 抓取当前页面结构"
                   className="shrink-0 h-8 px-3 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/20 text-brand-400 text-[11px] font-semibold flex items-center gap-1.5 transition-all duration-200 disabled:opacity-50"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isFetchingSnapshot ? 'animate-spin' : ''}`} />
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${isFetchingSnapshot ? "animate-spin" : ""}`}
+                  />
                   {isFetchingSnapshot ? "感知中..." : "刷新 CDP 快照"}
                 </button>
               </div>
@@ -368,7 +419,9 @@ export const Dashboard: React.FC = () => {
                   <div className="font-bold mb-1 flex items-center gap-1">
                     <AlertTriangle className="w-3.5 h-3.5" /> CDP 连接失败
                   </div>
-                  <p className="break-all whitespace-pre-wrap">{snapshotError}</p>
+                  <p className="break-all whitespace-pre-wrap">
+                    {snapshotError}
+                  </p>
                   <p className="mt-2 text-text-muted not-italic">
                     💡 请先用以下命令启动 Chrome：
                     <br />
@@ -423,7 +476,9 @@ export const Dashboard: React.FC = () => {
                           return (
                             <div
                               key={el.index}
-                              onMouseEnter={() => setHoveredElementIdx(el.index)}
+                              onMouseEnter={() =>
+                                setHoveredElementIdx(el.index)
+                              }
                               onMouseLeave={() => setHoveredElementIdx(null)}
                               className={`p-3 rounded-lg border text-left cursor-pointer transition-all duration-200 ${
                                 isHovered
@@ -477,36 +532,53 @@ export const Dashboard: React.FC = () => {
 
           {/* Bottom Area: Healer Log Console */}
           {showHealer && (
-            <div className="h-48 bg-[#0b1121] flex flex-col p-4 font-mono select-none border-t border-border shrink-0">
-              <div className="flex items-center justify-between pb-2 border-b border-slate-800/60">
-                <div className="flex items-center gap-2">
-                  <Terminal className="w-4 h-4 text-brand-400" />
-                  <h4 className="text-xs font-bold text-slate-200">Healer 自愈引擎诊断中心</h4>
-                </div>
-                <span className="text-[10px] text-slate-500">本地 7B 模型实时日志监测</span>
-              </div>
-              <div className="flex-1 overflow-y-auto mt-2 space-y-1.5 text-[11px] leading-relaxed pr-2 custom-scrollbar">
-                {healerLogs.length > 0 ? (
-                  healerLogs.map((log, idx) => (
-                    <div
-                      key={idx}
-                      className={`p-1.5 rounded flex items-start gap-2.5 animate-fade-in ${
-                        log.resolved ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' : 'bg-slate-800/40 text-slate-300'
-                      }`}
-                    >
-                      <span className="text-[10px] text-slate-500 shrink-0">[{log.timestamp}]</span>
-                      <span>{log.message}</span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-slate-500 h-full flex items-center justify-center">
-                    <span>无故障检测。Healer 自愈引擎待命...</span>
+            <div
+              className="bg-[#0b1121] flex flex-col font-mono select-none shrink-0 relative border-t border-slate-800"
+              style={{ height: `${healerHeight}px` }}
+            >
+              {/* Resize Handle */}
+              <div
+                onMouseDown={handleHealerDragStart}
+                className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize bg-transparent hover:bg-brand-500/50 z-10 -translate-y-1/2 transition-colors"
+              />
+              <div className="flex-1 flex flex-col p-4 min-h-0">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800/60">
+                  <div className="flex items-center gap-2">
+                    <Terminal className="w-4 h-4 text-brand-400" />
+                    <h4 className="text-xs font-bold text-slate-200">
+                      Healer 自愈引擎诊断中心
+                    </h4>
                   </div>
-                )}
+                  <span className="text-[10px] text-slate-500">
+                    本地 7B 模型实时日志监测
+                  </span>
+                </div>
+                <div className="flex-1 overflow-y-auto mt-2 space-y-1.5 text-[11px] leading-relaxed pr-2 custom-scrollbar">
+                  {healerLogs.length > 0 ? (
+                    healerLogs.map((log, idx) => (
+                      <div
+                        key={idx}
+                        className={`p-1.5 rounded flex items-start gap-2.5 animate-fade-in ${
+                          log.resolved
+                            ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
+                            : "bg-slate-800/40 text-slate-300"
+                        }`}
+                      >
+                        <span className="text-[10px] text-slate-500 shrink-0">
+                          [{log.timestamp}]
+                        </span>
+                        <span>{log.message}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-slate-500 h-full flex items-center justify-center">
+                      <span>无故障检测。Healer 自愈引擎待命...</span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
-
         </div>
       </div>
     </div>

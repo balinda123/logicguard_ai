@@ -40,6 +40,8 @@ pub struct InteractiveElement {
     pub disabled: bool,
     pub selector: String,
     pub visible: bool,
+    pub x: Option<i32>,
+    pub y: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -207,6 +209,8 @@ pub fn browser_get_snapshot(port: Option<u16>) -> Result<PageSnapshot, String> {
                 disabled: el["disabled"].as_bool().unwrap_or(false),
                 selector: el["selector"].as_str().unwrap_or("").to_string(),
                 visible: el["visible"].as_bool().unwrap_or(true),
+                x: el["x"].as_i64().map(|v| v as i32),
+                y: el["y"].as_i64().map(|v| v as i32),
             })
         })
         .collect();
@@ -231,6 +235,22 @@ pub fn browser_click(selector: String, port: Option<u16>, timeout: Option<u32>) 
     parse_response::<ActionResult>(&raw)
 }
 
+/// 鼠标悬停
+#[command]
+pub fn browser_hover(selector: String, port: Option<u16>, timeout: Option<u32>) -> Result<ActionResult, String> {
+    let cdp_port = port.unwrap_or(9222).to_string();
+    let timeout_ms = timeout.unwrap_or(5000).to_string();
+    
+    let raw = run_sidecar(vec![
+        "hover".to_string(),
+        format!("--port={}", cdp_port),
+        format!("--selector={}", selector),
+        format!("--timeout={}", timeout_ms),
+    ])?;
+    
+    parse_response::<ActionResult>(&raw)
+}
+
 /// 在输入框里输入文字
 /// 📚 前端调用: await invoke('browser_type', { selector: '#username', value: 'admin' })
 #[command]
@@ -242,6 +262,21 @@ pub fn browser_type(selector: String, value: String, port: Option<u16>) -> Resul
         format!("--port={}", cdp_port),
         format!("--selector={}", selector),
         format!("--value={}", value),
+    ])?;
+    
+    parse_response::<ActionResult>(&raw)
+}
+
+/// 发送按键事件 (如 Enter)
+#[command]
+pub fn browser_press(selector: String, key: String, port: Option<u16>) -> Result<ActionResult, String> {
+    let cdp_port = port.unwrap_or(9222).to_string();
+    
+    let raw = run_sidecar(vec![
+        "press".to_string(),
+        format!("--port={}", cdp_port),
+        format!("--selector={}", selector),
+        format!("--key={}", key),
     ])?;
     
     parse_response::<ActionResult>(&raw)
