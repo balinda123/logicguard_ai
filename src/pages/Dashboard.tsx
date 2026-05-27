@@ -11,12 +11,16 @@ import {
   RefreshCw,
   PanelRight,
   PanelBottom,
+  FileCode,
+  Zap,
 } from "lucide-react";
-import type { PlanStep, HealerLog, PageContext } from "../types";
+import type { PlanStep, HealerLog, PageContext, TestScript, TestStep } from "../types";
 import { defaultTemplates } from "../templates/defaultTemplates";
 import { planTask, isConfigured } from "../api/llmBridge";
 import { getPageSnapshot } from "../api/browserBridge";
 import { executeTaskLoop } from "../agents/executorEngine";
+import { generateTestScript } from "../agents/scriptGenerator";
+import { executeTestScript } from "../agents/scriptExecutor";
 
 export const Dashboard: React.FC = () => {
   const [taskInput, setTaskInput] = useState("");
@@ -91,6 +95,56 @@ export const Dashboard: React.FC = () => {
 
   const [usingRealLlm, setUsingRealLlm] = useState(false);
   const [llmError, setLlmError] = useState<string | null>(null);
+
+  // ── 新架构：测试脚本状态 ──
+  const [testScript, setTestScript] = useState<TestScript | null>(null);
+  const [testSteps, setTestSteps] = useState<TestStep[]>([]);
+  const [isGeneratingScript, setIsGeneratingScript] = useState(false);
+  const [isRunningScript, setIsRunningScript] = useState(false);
+  const [activeMode, setActiveMode] = useState<'classic' | 'script'>('script');
+
+  /** 新架构：生成测试脚本（不立即执行，供用户预览）*/
+  const handleGenerateScript = async () => {
+    if (!taskInput.trim()) return;
+    setIsGeneratingScript(true);
+    setTestScript(null);
+    setTestSteps([]);
+    setHealerLogs([]);
+    setLlmError(null);
+
+    try {
+      const script = await generateTestScript(taskInput, {
+        onProgress: (msg) => setPlanningStatus(msg),
+      });
+      setTestScript(script);
+      setTestSteps(script.steps);
+      setPlanningStatus(null);
+    } catch (e) {
+      setLlmError(String(e));
+      setPlanningStatus(null);
+    } finally {
+      setIsGeneratingScript(false);
+    }
+  };
+
+  /** 新架构：执行已预览的测试脚本 */
+  const handleRunScript = async () => {
+    if (!testScript || testSteps.length === 0) return;
+    setIsRunningScript(true);
+    setHealerLogs([]);
+    // 重置所有步骤为 pending
+    setTestSteps(prev => prev.map(s => ({ ...s, status: 'pending' as const })));
+
+    await executeTestScript(
+      { ...testScript, steps: testSteps },
+      {
+        onStepUpdate: (step) =>
+          setTestSteps(prev => prev.map(s => s.stepId === step.stepId ? step : s)),
+        onHealerLog: (log) => setHealerLogs(prev => [...prev, log]),
+        onComplete: () => setIsRunningScript(false),
+      }
+    );
+  };
 
   const handleStartTask = async () => {
     setIsPlanning(true);
@@ -277,19 +331,58 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
 
+          {/* Mode Switcher */}
+          <div className="flex rounded-lg overflow-hidden border border-border bg-surface-2 text-xs">
+            <button
+              onClick={() => setActiveMode('script')}
+              className={`flex-1 py-1.5 flex items-center justify-center gap-1.5 transition-colors font-medium ${activeMode === 'script' ? 'bg-brand-500 text-white' : 'text-text-muted hover:text-text-primary'}`}
+            >
+              <FileCode className="w-3 h-3" /> 生成测试脚本
+            </button>
+            <button
+              onClick={() => setActiveMode('classic')}
+              className={`flex-1 py-1.5 flex items-center justify-center gap-1.5 transition-colors font-medium ${activeMode === 'classic' ? 'bg-brand-500 text-white' : 'text-text-muted hover:text-text-primary'}`}
+            >
+              <Zap className="w-3 h-3" /> 经典直接执行
+            </button>
+          </div>
+
           {/* Execution Button */}
           <div className="flex gap-3">
-            <button
-              onClick={handleStartTask}
-              disabled={isPlanning || isExecuting}
-              className="flex-1 h-10 rounded-lg bg-brand-500 hover:bg-brand-600 active:bg-brand-700 text-white font-medium text-xs flex items-center justify-center gap-2 glow disabled:opacity-40 transition-all duration-200"
-            >
-              <Play className="w-3.5 h-3.5" />{" "}
-              {isExecuting ? "正在自动执行..." : "开始智能任务"}
-            </button>
-            {(steps.length > 0 || isExecuting) && (
+            {activeMode === 'script' ? (
+              <>
+                <button
+                  onClick={handleGenerateScript}
+                  disabled={isGeneratingScript || isRunningScript || !taskInput.trim()}
+                  className="flex-1 h-10 rounded-lg bg-brand-500 hover:bg-brand-600 active:bg-brand-700 text-white font-medium text-xs flex items-center justify-center gap-2 glow disabled:opacity-40 transition-all duration-200"
+                >
+                  <FileCode className="w-3.5 h-3.5" />
+                  {isGeneratingScript ? "AI 生成脚本中..." : "生成测试脚本"}
+                </button>
+                {testSteps.length > 0 && (
+                  <button
+                    onClick={handleRunScript}
+                    disabled={isRunningScript}
+                    className="h-10 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center justify-center gap-2 disabled:opacity-40 transition-all duration-200"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    {isRunningScript ? "执行中..." : "执行脚本"}
+                  </button>
+                )}
+              </>
+            ) : (
               <button
-                onClick={resetTask}
+                onClick={handleStartTask}
+                disabled={isPlanning || isExecuting}
+                className="flex-1 h-10 rounded-lg bg-brand-500 hover:bg-brand-600 active:bg-brand-700 text-white font-medium text-xs flex items-center justify-center gap-2 glow disabled:opacity-40 transition-all duration-200"
+              >
+                <Play className="w-3.5 h-3.5" />
+                {isExecuting ? "正在自动执行..." : "开始智能任务"}
+              </button>
+            )}
+            {(steps.length > 0 || testSteps.length > 0) && (
+              <button
+                onClick={() => { resetTask(); setTestScript(null); setTestSteps([]); }}
                 className="w-10 h-10 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border hover:border-border-hover text-text-secondary hover:text-text-primary flex items-center justify-center transition-all duration-200"
                 title="重置"
               >
@@ -374,7 +467,85 @@ export const Dashboard: React.FC = () => {
             </div>
           )}
 
-          {/* Loader planning state */}
+          {/* ── 新架构：测试脚本预览面板 ── */}
+          {testSteps.length > 0 && (
+            <div className="space-y-3 pt-4 border-t border-border animate-fade-in">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileCode className="w-3.5 h-3.5 text-brand-400" />
+                  <h4 className="text-xs font-bold text-text-primary">
+                    测试脚本预览
+                  </h4>
+                </div>
+                <span className="text-[10px] text-emerald-400 font-medium font-mono">
+                  确定性定位 · 无幻觉
+                </span>
+              </div>
+              {testScript?.title && (
+                <p className="text-[10px] text-text-muted italic">{testScript.title}</p>
+              )}
+              <div className="space-y-2">
+                {testSteps.map((step) => (
+                  <div
+                    key={step.stepId}
+                    className={`p-2.5 rounded-lg border text-left transition-all duration-200 ${
+                      step.status === 'running'
+                        ? 'bg-brand-500/5 border-brand-500/40'
+                        : step.status === 'success'
+                          ? 'bg-emerald-500/5 border-emerald-500/20'
+                          : step.status === 'failed'
+                            ? 'bg-red-500/5 border-red-500/30'
+                            : 'bg-surface-2/40 border-border/60'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex gap-2 min-w-0">
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-mono font-bold mt-0.5 shrink-0 ${
+                          step.status === 'running' ? 'bg-brand-500 text-white animate-pulse'
+                          : step.status === 'success' ? 'bg-emerald-500/20 text-emerald-400'
+                          : step.status === 'failed' ? 'bg-red-500/20 text-red-400'
+                          : 'bg-surface-3 text-text-muted'
+                        }`}>
+                          {step.stepId}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-medium text-text-secondary truncate">
+                            {step.description}
+                          </p>
+                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                            <span className="text-[9px] bg-brand-500/10 text-brand-400 font-mono px-1 py-0.5 rounded">
+                              {step.action}
+                            </span>
+                            <span className="text-[9px] bg-surface-3 text-text-muted font-mono px-1 py-0.5 rounded truncate max-w-[140px]">
+                              {step.target.strategy}="{step.target.value}"
+                            </span>
+                            {step.value && (
+                              <span className="text-[9px] text-emerald-400 font-mono">
+                                → "{step.value}"
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold font-mono shrink-0 ${
+                        step.status === 'success' ? 'bg-emerald-500/15 text-emerald-400'
+                        : step.status === 'running' ? 'bg-brand-500/20 text-brand-400 animate-pulse'
+                        : step.status === 'failed' ? 'bg-red-500/15 text-red-400'
+                        : 'bg-surface-3 text-text-muted'
+                      }`}>
+                        {step.status === 'success' ? 'DONE'
+                          : step.status === 'running' ? 'RUN'
+                          : step.status === 'failed' ? 'FAIL'
+                          : 'WAIT'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+
           {planningStatus && (
             <div className="flex flex-col items-center justify-center p-8 space-y-3 animate-pulse border-t border-border">
               <RotateCcw className="w-6 h-6 text-brand-400 animate-spin" />

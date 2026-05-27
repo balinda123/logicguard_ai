@@ -34,11 +34,37 @@ export interface PageContext {
 }
 
 export interface GeneratorOutput {
-  action: 'click' | 'type' | 'press' | 'navigate' | 'scroll' | 'wait' | 'select' | 'hover';
+  action: 'click' | 'type' | 'press' | 'navigate' | 'scroll' | 'wait' | 'select' | 'hover' | 'assert';
   target: string;
   value?: string;
   reason: string;
   confidence: number;
+}
+
+// ── 新架构：确定性测试脚本 ──
+export type TargetStrategy = 'placeholder' | 'aria-label' | 'text' | 'testid' | 'name' | 'selector' | 'index';
+
+export interface TestTarget {
+  strategy: TargetStrategy;
+  value: string;
+  description?: string; // 人类可读说明
+}
+
+export interface TestStep {
+  stepId: number;
+  description: string;
+  action: 'click' | 'type' | 'press' | 'hover' | 'navigate' | 'scroll' | 'wait' | 'assert' | 'select';
+  target: TestTarget;
+  value?: string; // type 的文字内容、press 的按键名、assert 的期望文本等
+  status: 'pending' | 'running' | 'success' | 'failed';
+}
+
+export interface TestScript {
+  scriptId: string;
+  title: string;
+  userIntent: string;
+  steps: TestStep[];
+  generatedAt: string;
 }
 
 export interface HealerLog {

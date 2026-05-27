@@ -22,6 +22,7 @@ pub fn run() {
       llm::plan_task,
       llm::generate_action,
       llm::heal_step,
+      llm::generate_test_script,
       // 浏览器 CDP 控制命令
       browser::browser_get_snapshot,
       browser::browser_click,

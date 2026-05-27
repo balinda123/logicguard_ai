@@ -305,6 +305,18 @@ pub async fn heal_step(
     route_llm(&prompt, &config).await
 }
 
+/// 新架构：根据用户自然语言 + 当前 DOM 快照，一次性生成完整的确定性测试脚本
+#[command]
+pub async fn generate_test_script(
+    user_intent: String,
+    dom_snapshot: String,
+    page_url: String,
+    config: LlmConfig,
+) -> Result<String, String> {
+    let prompt = build_test_script_prompt(&user_intent, &dom_snapshot, &page_url);
+    route_llm(&prompt, &config).await
+}
+
 // =============================================
 // Prompt Builders
 // =============================================
@@ -398,5 +410,61 @@ fn build_healer_prompt(step: &str, failure: &str, dom: &str) -> String {
   "resolved": false
 }}"#,
         step, failure, dom
+    )
+}
+
+fn build_test_script_prompt(user_intent: &str, dom_snapshot: &str, page_url: &str) -> String {
+    format!(
+        r#"你是一名专业的自动化测试工程师，精通 Playwright 框架。你的职责是将用户的自然语言需求，转化为精确、可靠、可重复执行的自动化测试脚本。
+
+当前浏览器页面: {}
+
+页面上所有可交互元素（包含标签、文字、占位符、坐标）:
+{}
+
+用户需求: "{}"
+
+请将上述需求转化为一份完整的测试脚本。
+
+## 核心原则
+1. **元素定位的优先级**（从高到低，选最具唯一性的）:
+   - `placeholder`: input 标签的 placeholder 属性（最精准）
+   - `aria-label`: 元素的 aria-label 属性
+   - `name`: 表单元素的 name 属性
+   - `testid`: data-testid 属性
+   - `text`: 按钮/链接的精确文字（当文字在全页面唯一时使用）
+   - `selector`: 原始 CSS 选择器（最后选项）
+
+2. **绝对禁止**: 不要使用模糊的文字描述（如"点击搜索按钮"），必须用上方列表中的具体元素特征来定位。
+
+3. **回车键搜索**: 如果用户说"搜索"，且输入框没有独立的搜索按钮，使用 `press` 动作 + `Enter` 键，不要去找搜索按钮。
+
+4. **导航**: 如果用户说"进入/打开/访问某页面"，使用 `navigate` 动作，target 填 URL。
+
+5. 每个步骤后面的 `target.description` 必须用中文解释"这是哪个输入框/按钮"。
+
+## 输出格式
+请只输出以下 JSON 格式，不要输出任何其他文字:
+{{
+  "scriptId": "ts_<当前时间戳>",
+  "title": "<用一句话描述这个测试脚本的目的>",
+  "userIntent": "{}",
+  "generatedAt": "<ISO 时间>",
+  "steps": [
+    {{
+      "stepId": 1,
+      "description": "<清晰的中文步骤描述>",
+      "action": "<click|type|press|hover|navigate|scroll|wait|assert>",
+      "target": {{
+        "strategy": "<placeholder|aria-label|name|testid|text|selector>",
+        "value": "<对应属性的值>",
+        "description": "<中文说明这是什么元素>"
+      }},
+      "value": "<可选：type 时填输入内容，press 时填按键名如 Enter，assert 时填期望的文字>",
+      "status": "pending"
+    }}
+  ]
+}}"#,
+        page_url, dom_snapshot, user_intent, user_intent
     )
 }
