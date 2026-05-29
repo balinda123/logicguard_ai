@@ -5,6 +5,7 @@ import { Templates } from './pages/Templates';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import type { SystemStatus } from './types';
+import { getLlmConfig } from './api/llmBridge';
 import './App.css';
 
 function App() {
@@ -17,7 +18,7 @@ function App() {
     pocketbase: 'connected',
     tailscale: 'connected',
     activeProfile: 'Default (Admin)',
-    activeModel: 'qwen2.5:7b'
+    activeModel: getLlmConfig().model || 'qwen2.5:7b'
   });
 
   const handleRefreshStatus = async () => {
@@ -37,7 +38,7 @@ function App() {
       pocketbase: 'connected',
       tailscale: 'connected',
       activeProfile: 'Default (Admin)',
-      activeModel: status.activeModel
+      activeModel: getLlmConfig().model || 'qwen2.5:7b'
     });
     setIsRefreshing(false);
   };

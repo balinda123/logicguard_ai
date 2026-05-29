@@ -42,7 +42,7 @@ export interface GeneratorOutput {
 }
 
 // ── 新架构：确定性测试脚本 ──
-export type TargetStrategy = 'placeholder' | 'aria-label' | 'text' | 'testid' | 'name' | 'selector' | 'index';
+export type TargetStrategy = 'placeholder' | 'aria-label' | 'text' | 'testid' | 'name' | 'selector' | 'index' | 'accessible-name' | 'role';
 
 export interface TestTarget {
   strategy: TargetStrategy;

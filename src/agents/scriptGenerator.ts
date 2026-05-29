@@ -55,8 +55,8 @@ export async function generateTestScript(
 }
 
 /**
- * 构建富含元数据的 DOM 快照
- * 比普通的 compressDomForLlm 多了 placeholder / aria-label / name 等关键定位属性
+ * 构建富含元数据的 DOM/AX 快照
+ * 同时支持 AX 树节点（source='ax'）和 DOM 节点，为 AI 提供最完整的语义信息
  */
 function buildRichSnapshot(snapshot: { url: string; title: string; interactiveElements: any[] }): string {
   const lines: string[] = [];
@@ -66,28 +66,38 @@ function buildRichSnapshot(snapshot: { url: string; title: string; interactiveEl
   for (const el of snapshot.interactiveElements) {
     const parts: string[] = [];
     parts.push(`[#${el.index}]`);
-    parts.push(`<${(el.tag || 'el').toLowerCase()}>`);
 
-    if (el.text?.trim()) {
-      parts.push(`text="${el.text.trim().slice(0, 60)}"`);
-    }
-    if (el.placeholder) {
-      parts.push(`placeholder="${el.placeholder}"`);
-    }
-    if (el.ariaLabel) {
-      parts.push(`aria-label="${el.ariaLabel}"`);
-    }
-    if (el.role) {
-      parts.push(`role="${el.role}"`);
-    }
-    if (el.type) {
-      parts.push(`type="${el.type}"`);
-    }
-    if (el.x !== undefined && el.y !== undefined) {
-      parts.push(`[x:${el.x}, y:${el.y}]`);
-    }
-    if (!el.visible) {
-      parts.push('[hidden]');
+    // ── AX 树节点（语义最准确）──
+    if (el.source === 'ax') {
+      const roleTag = mapRoleToLabel(el.role);
+      parts.push(roleTag);
+
+      // accessibleName 是用户可见的文字/标签，这是 AI 理解"这是什么"的核心
+      if (el.accessibleName) parts.push(`name="${el.accessibleName}"`);
+      if (el.description)    parts.push(`description="${el.description}"`);
+      if (el.currentValue)   parts.push(`value="${el.currentValue}"`);
+      if (el.disabled)       parts.push('[disabled]');
+
+      // 定位策略：AX 节点优先用 accessible-name，通过 Playwright getByRole/getByLabel 定位
+      parts.push(`→ strategy:accessible-name="${el.accessibleName || el.description}"`);
+
+    } else {
+      // ── DOM 节点（兜底方案）──
+      const tag = (el.tag || 'el').toUpperCase();
+      const typeLabel = mapDomTagToLabel(tag, el.type, el.placeholder);
+      parts.push(typeLabel);
+
+      // 优先显示 placeholder（对于 INPUT 最有辨识度）
+      if (el.placeholder) parts.push(`placeholder="${el.placeholder}"`);
+      if (el.labelText)   parts.push(`label="${el.labelText}"`);
+      if (el.ariaLabel)   parts.push(`aria-label="${el.ariaLabel}"`);
+      if (el.text?.trim()) {
+        const preview = el.text.trim().replace(/\s+/g, ' ').slice(0, 50);
+        parts.push(tag === 'SELECT' ? `selected="${preview}"` : `text="${preview}"`);
+      }
+      if (tag === 'SELECT' && el.options) parts.push(`options=[${el.options}]`);
+      if (el.x !== undefined && el.y !== undefined) parts.push(`[x:${el.x}, y:${el.y}]`);
+      if (!el.visible) parts.push('[hidden]');
     }
 
     lines.push(parts.join(' '));
@@ -95,6 +105,42 @@ function buildRichSnapshot(snapshot: { url: string; title: string; interactiveEl
 
   return lines.join('\n');
 }
+
+function mapRoleToLabel(role: string): string {
+  const map: Record<string, string> = {
+    'button':   '[BUTTON]',
+    'link':     '[LINK]',
+    'textbox':  '[INPUT]',
+    'searchbox':'[INPUT(搜索)]',
+    'combobox': '[DROPDOWN-自定义]',  // el-select / ant-select 等
+    'listbox':  '[LISTBOX]',
+    'option':   '[OPTION]',
+    'checkbox': '[CHECKBOX]',
+    'radio':    '[RADIO]',
+    'tab':      '[TAB]',
+    'menuitem': '[MENUITEM]',
+    'treeitem': '[TREEITEM]',
+    'spinbutton': '[NUMBER-INPUT]',
+  };
+  return map[role] ?? `[${role.toUpperCase()}]`;
+}
+
+function mapDomTagToLabel(tag: string, type?: string, placeholder?: string): string {
+  if (tag === 'SELECT') return '[DROPDOWN-原生]';
+  if (tag === 'INPUT') {
+    const t = (type || 'text').toLowerCase();
+    if (t === 'checkbox') return '[CHECKBOX]';
+    if (t === 'radio')    return '[RADIO]';
+    // placeholder 含"请选择"说明是自定义下拉框的触发输入框
+    if (placeholder && placeholder.includes('请选择')) return '[DROPDOWN-自定义触发框]';
+    return '[INPUT]';
+  }
+  if (tag === 'BUTTON')   return '[BUTTON]';
+  if (tag === 'A')        return '[LINK]';
+  if (tag === 'TEXTAREA') return '[TEXTAREA]';
+  return `[${tag}]`;
+}
+
 
 /**
  * 解析 LLM 返回的 JSON，容错处理 Markdown 代码块等

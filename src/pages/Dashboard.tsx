@@ -13,14 +13,23 @@ import {
   PanelBottom,
   FileCode,
   Zap,
+  Bot,
 } from "lucide-react";
-import type { PlanStep, HealerLog, PageContext, TestScript, TestStep } from "../types";
+import type {
+  PlanStep,
+  HealerLog,
+  PageContext,
+  TestScript,
+  TestStep,
+} from "../types";
 import { defaultTemplates } from "../templates/defaultTemplates";
-import { planTask, isConfigured } from "../api/llmBridge";
+import { planTask, isConfigured, getLlmConfig } from "../api/llmBridge";
 import { getPageSnapshot } from "../api/browserBridge";
 import { executeTaskLoop } from "../agents/executorEngine";
 import { generateTestScript } from "../agents/scriptGenerator";
 import { executeTestScript } from "../agents/scriptExecutor";
+import type { StagehandStep } from "../agents/stagehandExecutor";
+
 
 export const Dashboard: React.FC = () => {
   const [taskInput, setTaskInput] = useState("");
@@ -42,17 +51,17 @@ export const Dashboard: React.FC = () => {
   // Panel visibility toggles
   const [showSandbox, setShowSandbox] = useState(true);
   const [showHealer, setShowHealer] = useState(true);
-  const [healerHeight, setHealerHeight] = useState(192); // default height 192px
+  const [sandboxHeight, setSandboxHeight] = useState(240); // default height 240px
 
-  const handleHealerDragStart = (e: React.MouseEvent) => {
+  const handleSandboxDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
     const startY = e.clientY;
-    const startHeight = healerHeight;
+    const startHeight = sandboxHeight;
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
-      // Dragging up means a negative delta Y, but we want height to increase
+      // Dragging up means a negative delta Y, but we want height of sandbox to increase
       const deltaY = startY - moveEvent.clientY;
-      setHealerHeight(Math.max(100, Math.min(800, startHeight + deltaY)));
+      setSandboxHeight(Math.max(120, Math.min(600, startHeight + deltaY)));
     };
 
     const handleMouseUp = () => {
@@ -65,6 +74,7 @@ export const Dashboard: React.FC = () => {
     document.addEventListener("mouseup", handleMouseUp);
     document.body.style.cursor = "row-resize";
   };
+
 
   // Template matching algorithm based on user input
   useEffect(() => {
@@ -101,7 +111,13 @@ export const Dashboard: React.FC = () => {
   const [testSteps, setTestSteps] = useState<TestStep[]>([]);
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
   const [isRunningScript, setIsRunningScript] = useState(false);
-  const [activeMode, setActiveMode] = useState<'classic' | 'script'>('script');
+  const [activeMode, setActiveMode] = useState<
+    "classic" | "script" | "stagehand"
+  >("stagehand");
+
+  // ── Stagehand-First 模式状态 ──
+  const [stagehandSteps, setStagehandSteps] = useState<StagehandStep[]>([]);
+  const [isRunningStagehand, setIsRunningStagehand] = useState(false);
 
   /** 新架构：生成测试脚本（不立即执行，供用户预览）*/
   const handleGenerateScript = async () => {
@@ -133,16 +149,20 @@ export const Dashboard: React.FC = () => {
     setIsRunningScript(true);
     setHealerLogs([]);
     // 重置所有步骤为 pending
-    setTestSteps(prev => prev.map(s => ({ ...s, status: 'pending' as const })));
+    setTestSteps((prev) =>
+      prev.map((s) => ({ ...s, status: "pending" as const })),
+    );
 
     await executeTestScript(
       { ...testScript, steps: testSteps },
       {
         onStepUpdate: (step) =>
-          setTestSteps(prev => prev.map(s => s.stepId === step.stepId ? step : s)),
-        onHealerLog: (log) => setHealerLogs(prev => [...prev, log]),
+          setTestSteps((prev) =>
+            prev.map((s) => (s.stepId === step.stepId ? step : s)),
+          ),
+        onHealerLog: (log) => setHealerLogs((prev) => [...prev, log]),
         onComplete: () => setIsRunningScript(false),
-      }
+      },
     );
   };
 
@@ -239,13 +259,100 @@ export const Dashboard: React.FC = () => {
     setIsPlanning(false);
   };
 
+  /** Stagehand 原生闭环 Agent：把完整目标交给 AI 自主执行，实时接收每一步动态 */
+  const handleStagehandRun = async () => {
+    if (!taskInput.trim()) return;
+    setIsRunningStagehand(true);
+    setHealerLogs([]);
+    setLlmError(null);
+    setStagehandSteps([]);
+    setPlanningStatus('🚀 AI Agent 正在接管浏览器，开始自主执行...');
+
+    let stepCounter = 0;
+    let unlistenFn: (() => void) | null = null;
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const { listen } = await import('@tauri-apps/api/event');
+      const config = getLlmConfig();
+
+      unlistenFn = await listen<{
+        type: string;
+        description: string;
+        detail: string | null;
+        timestamp: string;
+      }>('stagehand-agent-step', (event) => {
+        const { type, description } = event.payload;
+
+        const stepStatus: StagehandStep['status'] =
+          type === 'done' ? 'success' :
+          type === 'error' ? 'failed' :
+          'running';
+
+        stepCounter++;
+        const newStep: StagehandStep = {
+          stepId: stepCounter,
+          description,
+          status: stepStatus,
+        };
+
+        setStagehandSteps(prev => [...prev, newStep]);
+
+        const emoji =
+          type === 'done' ? '✅' :
+          type === 'error' ? '❌' :
+          type === 'action' ? '🤖' : '🧠';
+        setHealerLogs(prev => [...prev, {
+          timestamp: new Date().toLocaleTimeString(),
+          stepId: stepCounter,
+          strategy: 'ai_diagnose',
+          message: `${emoji} [Agent] ${description}`,
+          resolved: type === 'done',
+        }]);
+
+        setPlanningStatus(null);
+      });
+
+      await invoke('browser_run_agent', {
+        instruction: taskInput,
+        port: 9222,
+        config,
+      });
+
+      setHealerLogs(prev => [...prev, {
+        timestamp: new Date().toLocaleTimeString(),
+        stepId: stepCounter + 1,
+        strategy: 'ai_diagnose',
+        message: '✅ [Agent] 所有任务已成功完成！',
+        resolved: true,
+      }]);
+    } catch (e: any) {
+      const errMsg = e?.message || String(e);
+      setLlmError(errMsg);
+      setHealerLogs(prev => [...prev, {
+        timestamp: new Date().toLocaleTimeString(),
+        stepId: stepCounter + 1,
+        strategy: 'abort',
+        message: `❌ [Agent] 执行失败: ${errMsg}`,
+        resolved: false,
+      }]);
+      setPlanningStatus(null);
+    } finally {
+      if (unlistenFn) unlistenFn();
+      setIsRunningStagehand(false);
+    }
+  };
+
+
   return (
     <div className="flex-1 flex flex-col h-full bg-transparent overflow-hidden animate-fade-in">
-      {/* Upper Area: Split Panel */}
-      <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden min-h-0 min-w-0">
+      {/* Upper Area: Task Setup & Healer Split Panel */}
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0 min-w-0">
         {/* Left Side: Setup & Steps Control */}
         <div
-          className={`w-full ${showSandbox ? "lg:w-[380px] lg:border-r" : "lg:flex-1"} shrink-0 border-b lg:border-b-0 border-border flex flex-col lg:h-full lg:overflow-y-auto p-6 space-y-6 transition-all duration-300`}
+          className={`flex-1 shrink-0 flex flex-col h-full overflow-y-auto p-6 space-y-6 bg-surface-0 ${
+            showHealer ? "border-r border-border" : ""
+          }`}
         >
           <div className="flex items-start justify-between">
             <div>
@@ -331,29 +438,26 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* Mode Switcher */}
-          <div className="flex rounded-lg overflow-hidden border border-border bg-surface-2 text-xs">
-            <button
-              onClick={() => setActiveMode('script')}
-              className={`flex-1 py-1.5 flex items-center justify-center gap-1.5 transition-colors font-medium ${activeMode === 'script' ? 'bg-brand-500 text-white' : 'text-text-muted hover:text-text-primary'}`}
-            >
-              <FileCode className="w-3 h-3" /> 生成测试脚本
-            </button>
-            <button
-              onClick={() => setActiveMode('classic')}
-              className={`flex-1 py-1.5 flex items-center justify-center gap-1.5 transition-colors font-medium ${activeMode === 'classic' ? 'bg-brand-500 text-white' : 'text-text-muted hover:text-text-primary'}`}
-            >
-              <Zap className="w-3 h-3" /> 经典直接执行
-            </button>
-          </div>
-
           {/* Execution Button */}
           <div className="flex gap-3">
-            {activeMode === 'script' ? (
+            {activeMode === "stagehand" ? (
+              <>
+                <button
+                  onClick={handleStagehandRun}
+                  disabled={isRunningStagehand || !taskInput.trim()}
+                  className="flex-1 h-10 rounded-lg bg-brand-500 hover:bg-brand-600 active:bg-brand-700 text-white font-medium text-xs flex items-center justify-center gap-2 glow disabled:opacity-40 transition-all duration-200"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  {isRunningStagehand ? "AI 智能执行中..." : "开始 AI 智能执行"}
+                </button>
+              </>
+            ) : activeMode === "script" ? (
               <>
                 <button
                   onClick={handleGenerateScript}
-                  disabled={isGeneratingScript || isRunningScript || !taskInput.trim()}
+                  disabled={
+                    isGeneratingScript || isRunningScript || !taskInput.trim()
+                  }
                   className="flex-1 h-10 rounded-lg bg-brand-500 hover:bg-brand-600 active:bg-brand-700 text-white font-medium text-xs flex items-center justify-center gap-2 glow disabled:opacity-40 transition-all duration-200"
                 >
                   <FileCode className="w-3.5 h-3.5" />
@@ -380,9 +484,16 @@ export const Dashboard: React.FC = () => {
                 {isExecuting ? "正在自动执行..." : "开始智能任务"}
               </button>
             )}
-            {(steps.length > 0 || testSteps.length > 0) && (
+            {(steps.length > 0 ||
+              testSteps.length > 0 ||
+              stagehandSteps.length > 0) && (
               <button
-                onClick={() => { resetTask(); setTestScript(null); setTestSteps([]); }}
+                onClick={() => {
+                  resetTask();
+                  setTestScript(null);
+                  setTestSteps([]);
+                  setStagehandSteps([]);
+                }}
                 className="w-10 h-10 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border hover:border-border-hover text-text-secondary hover:text-text-primary flex items-center justify-center transition-all duration-200"
                 title="重置"
               >
@@ -398,9 +509,6 @@ export const Dashboard: React.FC = () => {
                 <h4 className="text-xs font-bold text-text-primary">
                   Planner 任务分步计划
                 </h4>
-                {/* <span className="text-[10px] text-brand-400 font-medium">
-                  100% 本地 7B 模型生成
-                </span> */}
               </div>
               <div className="space-y-2">
                 {steps.map((step) => (
@@ -438,7 +546,6 @@ export const Dashboard: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Badge showing healers or execution status */}
                     <div className="flex flex-col items-end gap-1.5">
                       <span
                         className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold font-mono ${
@@ -467,7 +574,85 @@ export const Dashboard: React.FC = () => {
             </div>
           )}
 
-          {/* ── 新架构：测试脚本预览面板 ── */}
+          {/* Stagehand：AI 智能执行步骤面板 */}
+          {stagehandSteps.length > 0 && (
+            <div className="space-y-3 pt-4 border-t border-border animate-fade-in">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Zap className="w-3.5 h-3.5 text-brand-400" />
+                  <h4 className="text-xs font-bold text-text-primary">
+                    AI 智能执行步骤
+                  </h4>
+                </div>
+                <span className="text-[10px] text-brand-400 font-medium font-mono">
+                  Stagehand · 每步实时感知
+                </span>
+              </div>
+              <div className="space-y-2">
+                {stagehandSteps.map((step) => (
+                  <div
+                    key={step.stepId}
+                    className={`p-2.5 rounded-lg border text-left transition-all duration-200 ${
+                      step.status === "running"
+                        ? "bg-brand-500/5 border-brand-500/40"
+                        : step.status === "success"
+                          ? "bg-emerald-500/5 border-emerald-500/20"
+                          : step.status === "failed"
+                            ? "bg-red-500/5 border-red-500/30"
+                            : "bg-surface-2/40 border-border/60"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex gap-2 min-w-0">
+                        <span
+                          className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-mono font-bold mt-0.5 shrink-0 ${
+                            step.status === "running"
+                              ? "bg-brand-500 text-white animate-pulse"
+                              : step.status === "success"
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : step.status === "failed"
+                                  ? "bg-red-500/20 text-red-400"
+                                  : "bg-surface-3 text-text-muted"
+                          }`}
+                        >
+                          {step.stepId}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-medium text-text-secondary">
+                            {step.description}
+                          </p>
+                          <span className="text-[9px] bg-brand-500/10 text-brand-400 font-mono px-1 py-0.5 rounded mt-1 inline-block">
+                            🤖 Stagehand act()
+                          </span>
+                        </div>
+                      </div>
+                      <span
+                        className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold font-mono shrink-0 ${
+                          step.status === "success"
+                            ? "bg-emerald-500/15 text-emerald-400"
+                            : step.status === "running"
+                              ? "bg-brand-500/20 text-brand-400 animate-pulse"
+                              : step.status === "failed"
+                                ? "bg-red-500/15 text-red-400"
+                                : "bg-surface-3 text-text-muted"
+                        }`}
+                      >
+                        {step.status === "success"
+                          ? "DONE"
+                          : step.status === "running"
+                            ? "RUN"
+                            : step.status === "failed"
+                              ? "FAIL"
+                              : "WAIT"}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 测试脚本预览面板 */}
           {testSteps.length > 0 && (
             <div className="space-y-3 pt-4 border-t border-border animate-fade-in">
               <div className="flex items-center justify-between">
@@ -482,30 +667,37 @@ export const Dashboard: React.FC = () => {
                 </span>
               </div>
               {testScript?.title && (
-                <p className="text-[10px] text-text-muted italic">{testScript.title}</p>
+                <p className="text-[10px] text-text-muted italic">
+                  {testScript.title}
+                </p>
               )}
               <div className="space-y-2">
                 {testSteps.map((step) => (
                   <div
                     key={step.stepId}
                     className={`p-2.5 rounded-lg border text-left transition-all duration-200 ${
-                      step.status === 'running'
-                        ? 'bg-brand-500/5 border-brand-500/40'
-                        : step.status === 'success'
-                          ? 'bg-emerald-500/5 border-emerald-500/20'
-                          : step.status === 'failed'
-                            ? 'bg-red-500/5 border-red-500/30'
-                            : 'bg-surface-2/40 border-border/60'
+                      step.status === "running"
+                        ? "bg-brand-500/5 border-brand-500/40"
+                        : step.status === "success"
+                          ? "bg-emerald-500/5 border-emerald-500/20"
+                          : step.status === "failed"
+                            ? "bg-red-500/5 border-red-500/30"
+                            : "bg-surface-2/40 border-border/60"
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex gap-2 min-w-0">
-                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-mono font-bold mt-0.5 shrink-0 ${
-                          step.status === 'running' ? 'bg-brand-500 text-white animate-pulse'
-                          : step.status === 'success' ? 'bg-emerald-500/20 text-emerald-400'
-                          : step.status === 'failed' ? 'bg-red-500/20 text-red-400'
-                          : 'bg-surface-3 text-text-muted'
-                        }`}>
+                        <span
+                          className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-mono font-bold mt-0.5 shrink-0 ${
+                            step.status === "running"
+                              ? "bg-brand-500 text-white animate-pulse"
+                              : step.status === "success"
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : step.status === "failed"
+                                  ? "bg-red-500/20 text-red-400"
+                                  : "bg-surface-3 text-text-muted"
+                          }`}
+                        >
                           {step.stepId}
                         </span>
                         <div className="min-w-0">
@@ -527,16 +719,24 @@ export const Dashboard: React.FC = () => {
                           </div>
                         </div>
                       </div>
-                      <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold font-mono shrink-0 ${
-                        step.status === 'success' ? 'bg-emerald-500/15 text-emerald-400'
-                        : step.status === 'running' ? 'bg-brand-500/20 text-brand-400 animate-pulse'
-                        : step.status === 'failed' ? 'bg-red-500/15 text-red-400'
-                        : 'bg-surface-3 text-text-muted'
-                      }`}>
-                        {step.status === 'success' ? 'DONE'
-                          : step.status === 'running' ? 'RUN'
-                          : step.status === 'failed' ? 'FAIL'
-                          : 'WAIT'}
+                      <span
+                        className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold font-mono shrink-0 ${
+                          step.status === "success"
+                            ? "bg-emerald-500/15 text-emerald-400"
+                            : step.status === "running"
+                              ? "bg-brand-500/20 text-brand-400 animate-pulse"
+                              : step.status === "failed"
+                                ? "bg-red-500/15 text-red-400"
+                                : "bg-surface-3 text-text-muted"
+                        }`}
+                      >
+                        {step.status === "success"
+                          ? "DONE"
+                          : step.status === "running"
+                            ? "RUN"
+                            : step.status === "failed"
+                              ? "FAIL"
+                              : "WAIT"}
                       </span>
                     </div>
                   </div>
@@ -544,7 +744,6 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
           )}
-
 
           {planningStatus && (
             <div className="flex flex-col items-center justify-center p-8 space-y-3 animate-pulse border-t border-border">
@@ -556,202 +755,162 @@ export const Dashboard: React.FC = () => {
           )}
         </div>
 
-        {/* Right Side / Bottom Area Container */}
-        <div className="flex-1 min-w-0 flex flex-col h-full bg-transparent overflow-hidden">
-          {/* Sandbox Area */}
-          {showSandbox && (
-            <div className="flex-1 min-h-0 flex flex-col p-6 space-y-4 overflow-y-auto">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="text-sm font-bold text-text-primary mb-1">
-                    页面结构化感知层 (Accessibility Sandbox)
-                  </h3>
-                  <p className="text-xs text-text-muted">
-                    通过 Chrome CDP 实时抓取可交互 DOM 元素，无需截图，节省 90%
-                    AI Token
-                  </p>
-                </div>
-                <button
-                  onClick={handleFetchSnapshot}
-                  disabled={isFetchingSnapshot}
-                  title="从已打开的 Chrome 抓取当前页面结构"
-                  className="shrink-0 h-8 px-3 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/20 text-brand-400 text-[11px] font-semibold flex items-center gap-1.5 transition-all duration-200 disabled:opacity-50"
-                >
-                  <RefreshCw
-                    className={`w-3.5 h-3.5 ${isFetchingSnapshot ? "animate-spin" : ""}`}
-                  />
-                  {isFetchingSnapshot ? "感知中..." : "刷新 CDP 快照"}
-                </button>
+        {/* Right Side: Healer Log Console */}
+        {showHealer && (
+          <div className="flex-1 bg-[#050b18] border-l border-border flex flex-col font-mono h-full overflow-hidden p-6 space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800/60 shrink-0">
+              <div className="flex items-center gap-2">
+                <Terminal className="w-4 h-4 text-brand-400 animate-pulse" />
+                <h4 className="text-sm font-bold text-slate-200">
+                  Healer 自愈引擎诊断中心
+                </h4>
               </div>
-
-              {/* CDP 错误提示 */}
-              {snapshotError && (
-                <div className="p-3 rounded-lg bg-warning/5 border border-warning/15 text-[10px] text-warning font-mono leading-relaxed">
-                  <div className="font-bold mb-1 flex items-center gap-1">
-                    <AlertTriangle className="w-3.5 h-3.5" /> CDP 连接失败
+              <span className="text-[10px] text-slate-500 font-medium">
+                本地 7B 模型实时日志监测
+              </span>
+            </div>
+            <div className="flex-1 overflow-y-auto mt-2 space-y-2 text-xs leading-relaxed pr-2 custom-scrollbar min-h-0">
+              {healerLogs.length > 0 ? (
+                healerLogs.map((log, idx) => (
+                  <div
+                    key={idx}
+                    className={`p-2.5 rounded-lg flex items-start gap-2.5 border-slate-800 transition-all duration-200 ${
+                      log.resolved
+                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                        : "bg-slate-900/60 text-slate-200 animate-fade-in"
+                    }`}
+                  >
+                    <span className="text-[10px] text-slate-500 shrink-0 select-none">
+                      [{log.timestamp}]
+                    </span>
+                    <span>{log.message}</span>
                   </div>
-                  <p className="break-all whitespace-pre-wrap">
-                    {snapshotError}
-                  </p>
-                  <p className="mt-2 text-text-muted not-italic">
-                    💡 请先用以下命令启动 Chrome：
-                    <br />
-                    <code className="bg-surface-3 px-1 rounded">
-                      chrome.exe --remote-debugging-port=9222
-                    </code>
-                  </p>
+                ))
+              ) : (
+                <div className="text-slate-500 h-full flex items-center justify-center italic">
+                  <span>无故障检测。Healer 自愈引擎待命...</span>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+      </div>
 
-              <div className="flex-1 min-h-[250px] border border-border rounded-xl bg-surface-1 overflow-hidden flex flex-col glow">
-                {/* Virtual Browser Top-Bar */}
-                <div className="h-10 border-b border-border bg-surface-2/60 px-4 flex items-center gap-3">
-                  <div className="flex gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-error/30"></span>
-                    <span className="w-2.5 h-2.5 rounded-full bg-warning/30"></span>
-                    <span
-                      className={`w-2.5 h-2.5 rounded-full ${currentPage ? "bg-success" : "bg-success/30"}`}
-                    ></span>
-                  </div>
-                  <div className="flex-1 max-w-lg bg-surface-0 border border-border px-3 py-1 rounded-md text-[10px] text-text-secondary font-mono flex items-center gap-2">
-                    <Globe className="w-3 h-3 text-text-muted" />
-                    <span className="truncate">
-                      {currentPage ? currentPage.url : "about:blank"}
-                    </span>
-                  </div>
-                  <div
-                    className={`text-[10px] font-semibold px-2 py-0.5 rounded ${currentPage ? "bg-success/10 text-success" : "text-text-muted bg-surface-3"}`}
-                  >
-                    {currentPage ? "CDP 已连接" : "Chrome Profile"}
-                  </div>
+      {/* Bottom Area: Page Accessibility Sandbox */}
+      {showSandbox && (
+        <div
+          className="shrink-0 flex flex-col bg-surface-1 border-t border-border relative min-h-0 transition-all duration-100"
+          style={{ height: `${sandboxHeight}px` }}
+        >
+          {/* Draggable border for height resize */}
+          <div
+            onMouseDown={handleSandboxDragStart}
+            className="absolute top-0 left-0 right-0 h-2 cursor-row-resize bg-transparent hover:bg-brand-500/50 z-10 -translate-y-1/2 transition-colors"
+            title="拖动调整感知层高度"
+          />
+
+          {/* Sandbox Header */}
+          <div className="flex items-center justify-between px-6 py-2.5 border-b border-border bg-surface-2/30 shrink-0">
+            <div className="flex items-center gap-2">
+              <Globe className="w-4 h-4 text-brand-400 animate-pulse" />
+              <h3 className="text-xs font-bold text-text-primary">
+                页面结构化感知层 (Accessibility Sandbox)
+              </h3>
+              <span className="text-[10px] text-text-muted hidden md:inline">
+                · 通过 Chrome CDP 实时抓取可交互 DOM，无截图，极省 Token
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="flex bg-surface-0 border border-border px-2 py-0.5 rounded text-[9px] text-text-secondary font-mono max-w-xs md:max-w-md items-center gap-1.5 shrink-0">
+                <span className="truncate">{currentPage ? currentPage.url : "about:blank"}</span>
+              </div>
+              <button
+                onClick={handleFetchSnapshot}
+                disabled={isFetchingSnapshot}
+                title="从已打开 Chrome 抓取当前页面结构"
+                className="shrink-0 h-6.5 px-2.5 rounded-md bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/20 text-brand-400 text-[10px] font-semibold flex items-center gap-1.5 transition-all duration-200 disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={`w-3 h-3 ${isFetchingSnapshot ? "animate-spin" : ""}`}
+                />
+                {isFetchingSnapshot ? "感知中..." : "刷新快照"}
+              </button>
+            </div>
+          </div>
+
+          {/* Sandbox Elements Grid */}
+          <div className="flex-1 overflow-y-auto p-4 custom-scrollbar min-h-0">
+            {snapshotError && (
+              <div className="p-3 rounded-lg bg-warning/5 border border-warning/15 text-[10px] text-warning font-mono leading-relaxed max-w-xl mx-auto">
+                <div className="font-bold mb-1 flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5" /> CDP 连接失败
                 </div>
+                <p className="break-all whitespace-pre-wrap">{snapshotError}</p>
+                <p className="mt-2 text-text-muted not-italic">
+                  💡 请用命令行启动 Chrome：
+                  <code className="bg-surface-3 px-1 rounded ml-1 text-brand-400 font-mono">
+                    chrome.exe --remote-debugging-port=9222
+                  </code>
+                </p>
+              </div>
+            )}
 
-                {/* Sandbox main viewport */}
-                <div className="flex-1 flex min-h-0 relative">
-                  {currentPage ? (
-                    <div className="flex-1 flex flex-col p-5 space-y-4">
-                      {/* Page Title display */}
-                      <div className="flex items-center gap-2 pb-3 border-b border-border/40">
-                        <span className="text-[11px] font-bold text-brand-400 bg-brand-500/10 px-2 py-0.5 rounded font-mono uppercase">
-                          TITLE
+            {currentPage ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
+                {currentPage.interactiveElements.map((el) => {
+                  const isHovered = hoveredElementIdx === el.index;
+                  return (
+                    <div
+                      key={el.index}
+                      onMouseEnter={() => setHoveredElementIdx(el.index)}
+                      onMouseLeave={() => setHoveredElementIdx(null)}
+                      className={`p-2 rounded-lg border text-left cursor-pointer transition-all duration-200 ${
+                        isHovered
+                          ? "bg-brand-500/10 border-brand-500/50 shadow-sm"
+                          : "bg-surface-2 border-border/80 hover:border-brand-500/30"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[8px] bg-brand-500/20 text-brand-300 font-mono font-bold px-1.5 py-0.2 rounded">
+                          {el.tag}
                         </span>
-                        <span className="text-xs text-text-primary font-medium">
-                          {currentPage.title}
+                        <span className="text-[8px] text-text-muted font-mono font-medium">
+                          #{el.index}
                         </span>
                       </div>
 
-                      {/* Accessible UI Element Map */}
-                      <div className="grid grid-cols-2 gap-3 pt-2 overflow-y-auto pr-2 custom-scrollbar">
-                        {currentPage.interactiveElements.map((el) => {
-                          const isHovered = hoveredElementIdx === el.index;
-                          return (
-                            <div
-                              key={el.index}
-                              onMouseEnter={() =>
-                                setHoveredElementIdx(el.index)
-                              }
-                              onMouseLeave={() => setHoveredElementIdx(null)}
-                              className={`p-3 rounded-lg border text-left cursor-pointer transition-all duration-200 ${
-                                isHovered
-                                  ? "bg-brand-500/10 border-brand-500/50 shadow-md transform -translate-y-0.5"
-                                  : "bg-surface-2 border-border/80 hover:border-brand-500/30"
-                              }`}
-                            >
-                              <div className="flex items-center justify-between mb-1.5">
-                                <span className="text-[9px] bg-brand-500/20 text-brand-300 font-mono font-bold px-1.5 py-0.5 rounded">
-                                  {el.tag}
-                                </span>
-                                <span className="text-[8px] text-text-muted font-mono font-medium">
-                                  #{el.index}
-                                </span>
-                              </div>
+                      <p className="text-xs font-semibold text-text-primary truncate">
+                        {el.text || (
+                          <span className="italic text-text-muted font-normal">
+                            空内容
+                          </span>
+                        )}
+                      </p>
 
-                              <p className="text-xs font-semibold text-text-primary truncate">
-                                {el.text || (
-                                  <span className="italic text-text-muted font-normal">
-                                    空内容 / 占位输入框
-                                  </span>
-                                )}
-                              </p>
+                      {el.placeholder && (
+                        <p className="text-[9px] text-text-muted mt-0.5 italic truncate">
+                          提示: {el.placeholder}
+                        </p>
+                      )}
 
-                              {el.placeholder && (
-                                <p className="text-[10px] text-text-muted mt-1 italic truncate">
-                                  占位符: {el.placeholder}
-                                </p>
-                              )}
-
-                              <p className="text-[9px] text-brand-400 font-mono mt-1.5 truncate">
-                                {el.selector}
-                              </p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-text-muted space-y-2">
-                      <Search className="w-8 h-8 text-surface-4" />
-                      <p className="text-xs">
-                        等待任务开始，实时提取的DOM结构化元数据将展示在此处
+                      <p className="text-[8px] text-brand-400 font-mono mt-1 truncate">
+                        {el.selector}
                       </p>
                     </div>
-                  )}
-                </div>
+                  );
+                })}
               </div>
-            </div>
-          )}
-
-          {/* Bottom Area: Healer Log Console */}
-          {showHealer && (
-            <div
-              className="bg-[#0b1121] flex flex-col font-mono select-none shrink-0 relative border-t border-slate-800"
-              style={{ height: `${healerHeight}px` }}
-            >
-              {/* Resize Handle */}
-              <div
-                onMouseDown={handleHealerDragStart}
-                className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize bg-transparent hover:bg-brand-500/50 z-10 -translate-y-1/2 transition-colors"
-              />
-              <div className="flex-1 flex flex-col p-4 min-h-0">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-800/60">
-                  <div className="flex items-center gap-2">
-                    <Terminal className="w-4 h-4 text-brand-400" />
-                    <h4 className="text-xs font-bold text-slate-200">
-                      Healer 自愈引擎诊断中心
-                    </h4>
-                  </div>
-                  <span className="text-[10px] text-slate-500">
-                    本地 7B 模型实时日志监测
-                  </span>
-                </div>
-                <div className="flex-1 overflow-y-auto mt-2 space-y-1.5 text-[11px] leading-relaxed pr-2 custom-scrollbar">
-                  {healerLogs.length > 0 ? (
-                    healerLogs.map((log, idx) => (
-                      <div
-                        key={idx}
-                        className={`p-1.5 rounded flex items-start gap-2.5 animate-fade-in ${
-                          log.resolved
-                            ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
-                            : "bg-slate-800/40 text-slate-300"
-                        }`}
-                      >
-                        <span className="text-[10px] text-slate-500 shrink-0">
-                          [{log.timestamp}]
-                        </span>
-                        <span>{log.message}</span>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-slate-500 h-full flex items-center justify-center">
-                      <span>无故障检测。Healer 自愈引擎待命...</span>
-                    </div>
-                  )}
-                </div>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center p-4 text-center text-text-muted space-y-1">
+                <Search className="w-6 h-6 text-surface-4" />
+                <p className="text-xs">
+                  等待任务开始，实时提取的 DOM 结构化元数据将展示在此处。
+                </p>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

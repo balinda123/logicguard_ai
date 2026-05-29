@@ -17,8 +17,10 @@
  */
 
 use std::process::Command;
+use std::io::{BufRead, BufReader};
 use serde::{Deserialize, Serialize};
 use tauri::command;
+use tauri::Emitter;
 
 // ─── 数据类型定义 ──────────────────────────────────────────────
 // 📚 这些结构体要和前端的 TypeScript 类型完全对应
@@ -77,7 +79,9 @@ struct SidecarResponse<T> {
 // 📚 这个函数是所有浏览器操作的基础
 //    它启动 Node.js 子进程，等待结果，然后解析 JSON
 
-fn run_sidecar(args: Vec<String>) -> Result<String, String> {
+use crate::llm::LlmConfig;
+
+fn run_sidecar(args: Vec<String>, envs: Vec<(String, String)>) -> Result<String, String> {
     // 找到 node.js 可执行文件
     // 📚 在 Windows 上可能是 "node.exe"，在 Mac/Linux 上是 "node"
     let node_cmd = if cfg!(target_os = "windows") { "node" } else { "node" };
@@ -115,10 +119,16 @@ fn run_sidecar(args: Vec<String>) -> Result<String, String> {
 
     // 构建并运行命令
     // 📚 std::process::Command 是 Rust 的标准库，用来启动子进程
-    let output = Command::new(node_cmd)
-        .arg(&sidecar_path)
-        .args(&args)
-        .output()
+    let mut cmd = Command::new(node_cmd);
+    cmd.arg(&sidecar_path)
+       .args(&args);
+    
+    // 注入大模型配置环境变量供 Stagehand 调用
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+
+    let output = cmd.output()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 "找不到 Node.js！请先安装 Node.js (https://nodejs.org)".to_string()
@@ -148,11 +158,37 @@ fn run_sidecar(args: Vec<String>) -> Result<String, String> {
     Ok(stdout.trim().to_string())
 }
 
+fn run_sidecar_with_config(args: Vec<String>, config: Option<LlmConfig>) -> Result<String, String> {
+    let mut envs = Vec::new();
+    if let Some(cfg) = config {
+        if let Some(ref key) = cfg.api_key {
+            envs.push(("LLM_API_KEY".to_string(), key.clone()));
+            envs.push(("OPENAI_API_KEY".to_string(), key.clone()));
+            envs.push(("ANTHROPIC_API_KEY".to_string(), key.clone()));
+            envs.push(("GOOGLE_API_KEY".to_string(), key.clone()));
+            envs.push(("GEMINI_API_KEY".to_string(), key.clone()));
+            envs.push(("GOOGLE_GENERATIVE_AI_API_KEY".to_string(), key.clone()));
+        }
+        if let Some(ref base_url) = cfg.base_url {
+            envs.push(("LLM_BASE_URL".to_string(), base_url.clone()));
+            envs.push(("OPENAI_BASE_URL".to_string(), base_url.clone()));
+        }
+        envs.push(("LLM_PROVIDER".to_string(), cfg.provider));
+        envs.push(("LLM_MODEL".to_string(), cfg.model));
+    }
+    run_sidecar(args, envs)
+}
+
 // ─── 解析 Sidecar 响应 ────────────────────────────────────────
 fn parse_response<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<T, String> {
+    // 🌟 容错处理：从多行输出中寻找到真正的 JSON 响应行（兼容 Stagehand / Playwright 打印的背景日志）
+    let json_line = raw.lines()
+        .find(|line| line.trim().starts_with("{\"ok\":") || (line.trim().starts_with("{") && line.trim().contains("\"ok\"")))
+        .ok_or_else(|| format!("在 Sidecar 输出中找不到有效的 JSON 响应头。\n原始输出: {}", raw))?;
+
     // 先解析外层的 { ok, data, error }
-    let response: SidecarResponse<serde_json::Value> = serde_json::from_str(raw)
-        .map_err(|e| format!("Sidecar 输出不是有效 JSON: {}\n原始输出: {}", e, raw))?;
+    let response: SidecarResponse<serde_json::Value> = serde_json::from_str(json_line)
+        .map_err(|e| format!("Sidecar 响应 JSON 解析失败: {}\n匹配到的行: {}", e, json_line))?;
     
     if !response.ok {
         return Err(response.error.unwrap_or_else(|| "未知错误".to_string()));
@@ -171,18 +207,22 @@ fn parse_response<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<T, String> 
 /// 获取当前 Chrome 页面快照
 /// 📚 前端调用: await invoke('browser_get_snapshot', { port: 9222 })
 #[command]
-pub fn browser_get_snapshot(port: Option<u16>) -> Result<PageSnapshot, String> {
+pub fn browser_get_snapshot(port: Option<u16>, config: Option<LlmConfig>) -> Result<PageSnapshot, String> {
     let cdp_port = port.unwrap_or(9222).to_string();
     
-    let raw = run_sidecar(vec![
+    let raw = run_sidecar_with_config(vec![
         "get_snapshot".to_string(),
         format!("--port={}", cdp_port),
-    ])?;
+    ], config)?;
     
     // 📚 中间层转换：Sidecar 返回 camelCase JSON，我们需要 snake_case
     //    所以先解析成 serde_json::Value，手动映射字段
-    let response: SidecarResponse<serde_json::Value> = serde_json::from_str(&raw)
-        .map_err(|e| format!("解析快照响应失败: {}", e))?;
+    let json_line = raw.lines()
+        .find(|line| line.trim().starts_with("{\"ok\":") || (line.trim().starts_with("{") && line.trim().contains("\"ok\"")))
+        .ok_or_else(|| format!("在快照输出中找不到有效的 JSON 响应头。\n原始输出: {}", raw))?;
+
+    let response: SidecarResponse<serde_json::Value> = serde_json::from_str(json_line)
+        .map_err(|e| format!("解析快照响应失败: {}\n匹配到的行: {}", e, json_line))?;
     
     if !response.ok {
         return Err(response.error.unwrap_or_else(|| "获取快照失败".to_string()));
@@ -221,32 +261,32 @@ pub fn browser_get_snapshot(port: Option<u16>) -> Result<PageSnapshot, String> {
 /// 执行浏览器点击操作
 /// 📚 前端调用: await invoke('browser_click', { selector: '#btn-submit', port: 9222 })
 #[command]
-pub fn browser_click(selector: String, port: Option<u16>, timeout: Option<u32>) -> Result<ActionResult, String> {
+pub fn browser_click(selector: String, port: Option<u16>, timeout: Option<u32>, config: Option<LlmConfig>) -> Result<ActionResult, String> {
     let cdp_port = port.unwrap_or(9222).to_string();
     let timeout_ms = timeout.unwrap_or(5000).to_string();
     
-    let raw = run_sidecar(vec![
+    let raw = run_sidecar_with_config(vec![
         "click".to_string(),
         format!("--port={}", cdp_port),
         format!("--selector={}", selector),
         format!("--timeout={}", timeout_ms),
-    ])?;
+    ], config)?;
     
     parse_response::<ActionResult>(&raw)
 }
 
 /// 鼠标悬停
 #[command]
-pub fn browser_hover(selector: String, port: Option<u16>, timeout: Option<u32>) -> Result<ActionResult, String> {
+pub fn browser_hover(selector: String, port: Option<u16>, timeout: Option<u32>, config: Option<LlmConfig>) -> Result<ActionResult, String> {
     let cdp_port = port.unwrap_or(9222).to_string();
     let timeout_ms = timeout.unwrap_or(5000).to_string();
     
-    let raw = run_sidecar(vec![
+    let raw = run_sidecar_with_config(vec![
         "hover".to_string(),
         format!("--port={}", cdp_port),
         format!("--selector={}", selector),
         format!("--timeout={}", timeout_ms),
-    ])?;
+    ], config)?;
     
     parse_response::<ActionResult>(&raw)
 }
@@ -254,51 +294,51 @@ pub fn browser_hover(selector: String, port: Option<u16>, timeout: Option<u32>) 
 /// 在输入框里输入文字
 /// 📚 前端调用: await invoke('browser_type', { selector: '#username', value: 'admin' })
 #[command]
-pub fn browser_type(selector: String, value: String, port: Option<u16>) -> Result<ActionResult, String> {
+pub fn browser_type(selector: String, value: String, port: Option<u16>, config: Option<LlmConfig>) -> Result<ActionResult, String> {
     let cdp_port = port.unwrap_or(9222).to_string();
     
-    let raw = run_sidecar(vec![
+    let raw = run_sidecar_with_config(vec![
         "type".to_string(),
         format!("--port={}", cdp_port),
         format!("--selector={}", selector),
         format!("--value={}", value),
-    ])?;
+    ], config)?;
     
     parse_response::<ActionResult>(&raw)
 }
 
 /// 发送按键事件 (如 Enter)
 #[command]
-pub fn browser_press(selector: String, key: String, port: Option<u16>) -> Result<ActionResult, String> {
+pub fn browser_press(selector: String, key: String, port: Option<u16>, config: Option<LlmConfig>) -> Result<ActionResult, String> {
     let cdp_port = port.unwrap_or(9222).to_string();
     
-    let raw = run_sidecar(vec![
+    let raw = run_sidecar_with_config(vec![
         "press".to_string(),
         format!("--port={}", cdp_port),
         format!("--selector={}", selector),
         format!("--key={}", key),
-    ])?;
+    ], config)?;
     
     parse_response::<ActionResult>(&raw)
 }
 
 /// 导航到指定 URL
 #[command]
-pub fn browser_navigate(url: String, port: Option<u16>) -> Result<ActionResult, String> {
+pub fn browser_navigate(url: String, port: Option<u16>, config: Option<LlmConfig>) -> Result<ActionResult, String> {
     let cdp_port = port.unwrap_or(9222).to_string();
     
-    let raw = run_sidecar(vec![
+    let raw = run_sidecar_with_config(vec![
         "navigate".to_string(),
         format!("--port={}", cdp_port),
         format!("--url={}", url),
-    ])?;
+    ], config)?;
     
     parse_response::<ActionResult>(&raw)
 }
 
 /// 断言：检查元素存在
 #[command]
-pub fn browser_assert(selector: String, contains: Option<String>, port: Option<u16>) -> Result<ActionResult, String> {
+pub fn browser_assert(selector: String, contains: Option<String>, port: Option<u16>, config: Option<LlmConfig>) -> Result<ActionResult, String> {
     let cdp_port = port.unwrap_or(9222).to_string();
     
     let mut sidecar_args = vec![
@@ -311,7 +351,7 @@ pub fn browser_assert(selector: String, contains: Option<String>, port: Option<u
         sidecar_args.push(format!("--contains={}", text));
     }
     
-    let raw = run_sidecar(sidecar_args)?;
+    let raw = run_sidecar_with_config(sidecar_args, config)?;
     parse_response::<ActionResult>(&raw)
 }
 
@@ -433,4 +473,198 @@ pub fn launch_chrome_cdp(port: Option<u16>, user_data_dir: Option<String>) -> Re
 #[command]
 pub fn get_chrome_path() -> Result<String, String> {
     find_chrome_path().ok_or_else(|| "未检测到 Chrome 安装".to_string())
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🤖 Stagehand-First 命令：用 AI 直接驱动浏览器
+// ═══════════════════════════════════════════════════════════════
+
+/// Stagehand act：用自然语言指令让 AI 直接在当前页面执行操作
+/// 前端调用: await invoke('browser_act', { instruction: '点击报表中心', port: 9222 })
+#[command]
+pub fn browser_act(instruction: String, port: Option<u16>, config: Option<LlmConfig>) -> Result<ActionResult, String> {
+    let cdp_port = port.unwrap_or(9222).to_string();
+
+    let raw = run_sidecar_with_config(vec![
+        "act".to_string(),
+        format!("--port={}", cdp_port),
+        format!("--instruction={}", instruction),
+    ], config)?;
+
+    parse_response::<ActionResult>(&raw)
+}
+
+/// Stagehand observe：用自然语言让 AI 观察当前页面有哪些可操作元素
+/// 前端调用: await invoke('browser_observe', { instruction: '找到所有按钮', port: 9222 })
+#[command]
+pub fn browser_observe(instruction: String, port: Option<u16>, config: Option<LlmConfig>) -> Result<serde_json::Value, String> {
+    let cdp_port = port.unwrap_or(9222).to_string();
+
+    let raw = run_sidecar_with_config(vec![
+        "observe".to_string(),
+        format!("--port={}", cdp_port),
+        format!("--instruction={}", instruction),
+    ], config)?;
+
+    // observe 返回结构不固定（含 observations 数组），用 serde_json::Value 透传
+    let json_line = raw.lines()
+        .find(|line| line.trim().starts_with("{\"ok\":") || (line.trim().starts_with("{") && line.trim().contains("\"ok\"")))
+        .ok_or_else(|| format!("在 observe 输出中找不到有效的 JSON 响应。\n原始输出: {}", raw))?;
+
+    let response: SidecarResponse<serde_json::Value> = serde_json::from_str(json_line)
+        .map_err(|e| format!("解析 observe 响应失败: {}\n匹配到的行: {}", e, json_line))?;
+
+    if !response.ok {
+        return Err(response.error.unwrap_or_else(|| "observe 失败".to_string()));
+    }
+
+    response.data.ok_or_else(|| "observe 返回空数据".to_string())
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🚀 Stagehand 原生闭环 Agent：实时流式执行
+// ═══════════════════════════════════════════════════════════════
+
+/// Agent 步骤事件的数据结构（对应 sidecar 输出的 [AGENT_STEP] JSON）
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AgentStepEvent {
+    /// 步骤类型: "thinking" | "action" | "done" | "error"
+    #[serde(rename = "type")]
+    pub step_type: String,
+    /// 对用户展示的可读步骤描述
+    pub description: String,
+    /// 工具名或其他补充信息（可选）
+    pub detail: Option<String>,
+    /// ISO 时间戳
+    pub timestamp: String,
+}
+
+/// 启动 Stagehand 原生闭环 Agent，实时向前端推送每一步的动作
+/// 
+/// 工作原理：
+/// 1. 以 Stdio::piped() 方式启动 Node sidecar 子进程
+/// 2. 逐行读取子进程的 stdout
+/// 3. 对每一行以 "[AGENT_STEP]" 开头的行，解析 JSON 并通过 Tauri emit 发给前端
+/// 4. 等待子进程结束，解析最终结果返回
+/// 
+/// 前端调用: await invoke('browser_run_agent', { instruction: '登录并下载报表', port: 9222 })
+/// 前端监听: await listen('stagehand-agent-step', (event) => { ... })
+#[command]
+pub fn browser_run_agent(
+    app: tauri::AppHandle,
+    instruction: String,
+    port: Option<u16>,
+    config: Option<LlmConfig>,
+) -> Result<serde_json::Value, String> {
+    let cdp_port = port.unwrap_or(9222).to_string();
+    let node_cmd = "node";
+
+    // ── 找到 sidecar/index.js 路径 ──────────────────────────────
+    let sidecar_path = {
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("无法获取程序路径: {}", e))?;
+        let mut path = exe_path.clone();
+        let mut found = false;
+        for _ in 0..6 {
+            path = match path.parent() {
+                Some(p) => p.to_path_buf(),
+                None => break,
+            };
+            if path.join("sidecar").join("index.js").exists() {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err("找不到 sidecar/index.js".to_string());
+        }
+        path.join("sidecar").join("index.js")
+    };
+
+    // ── 构建带环境变量的命令 ─────────────────────────────────────
+    let mut cmd = Command::new(node_cmd);
+    cmd.arg(&sidecar_path)
+       .arg("agent")
+       .arg(format!("--port={}", cdp_port))
+       .arg(format!("--instruction={}", instruction))
+       .stdout(std::process::Stdio::piped())
+       .stderr(std::process::Stdio::piped());
+
+    // 注入 LLM 配置环境变量
+    if let Some(cfg) = config {
+        if let Some(ref key) = cfg.api_key {
+            cmd.env("LLM_API_KEY", key);
+            cmd.env("OPENAI_API_KEY", key);
+        }
+        if let Some(ref base_url) = cfg.base_url {
+            cmd.env("LLM_BASE_URL", base_url);
+            cmd.env("OPENAI_BASE_URL", base_url);
+        }
+        cmd.env("LLM_PROVIDER", &cfg.provider);
+        cmd.env("LLM_MODEL", &cfg.model);
+    }
+
+    // ── 启动子进程，以流式方式读取 stdout ────────────────────────
+    let mut child = cmd.spawn()
+        .map_err(|e| format!("启动 Agent sidecar 失败: {}", e))?;
+
+    let stdout = child.stdout.take()
+        .ok_or_else(|| "无法获取 sidecar stdout".to_string())?;
+
+    let reader = BufReader::new(stdout);
+    let mut all_output_lines: Vec<String> = Vec::new();
+    let agent_step_prefix = "[AGENT_STEP]";
+
+    // 逐行读取 stdout，实时解析并推送 Agent 步骤事件
+    for line in reader.lines() {
+        match line {
+            Ok(line_str) => {
+                all_output_lines.push(line_str.clone());
+                // 只处理带有 [AGENT_STEP] 前缀的行
+                if let Some(json_part) = line_str.strip_prefix(agent_step_prefix) {
+                    if let Ok(step_event) = serde_json::from_str::<AgentStepEvent>(json_part) {
+                        // 通过 Tauri 事件总线推送到前端
+                        // 前端通过 listen('stagehand-agent-step', ...) 接收
+                        let _ = app.emit("stagehand-agent-step", step_event);
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    // 等待子进程结束
+    let exit_status = child.wait()
+        .map_err(|e| format!("等待 Agent sidecar 结束失败: {}", e))?;
+
+    let full_output = all_output_lines.join("\n");
+
+    if !exit_status.success() {
+        // 从所有输出中找最终的 JSON 结果行（包含 ok: false 的错误信息）
+        let error_msg = full_output.lines()
+            .filter(|line| line.trim().starts_with("{\"ok\":") || 
+                           (line.trim().starts_with("{") && line.trim().contains("\"ok\"")))
+            .last()
+            .and_then(|line| serde_json::from_str::<SidecarResponse<serde_json::Value>>(line).ok())
+            .and_then(|resp| resp.error)
+            .unwrap_or_else(|| format!("Agent 执行失败（退出码: {:?}）", exit_status.code()));
+        return Err(error_msg);
+    }
+
+    // 从输出中提取最终的成功 JSON 结果行
+    let json_line = full_output.lines()
+        .filter(|line| !line.starts_with(agent_step_prefix)) // 排除 AGENT_STEP 行
+        .find(|line| line.trim().starts_with("{\"ok\":") || 
+                     (line.trim().starts_with("{") && line.trim().contains("\"ok\"")))
+        .ok_or_else(|| format!("Agent 执行完成但未找到有效的 JSON 结果。\n原始输出片段: {}", 
+                               &full_output[..full_output.len().min(500)]))?;
+
+    let response: SidecarResponse<serde_json::Value> = serde_json::from_str(json_line)
+        .map_err(|e| format!("解析 Agent 最终结果失败: {}", e))?;
+
+    if !response.ok {
+        return Err(response.error.unwrap_or_else(|| "Agent 报告任务失败".to_string()));
+    }
+
+    response.data.ok_or_else(|| "Agent 返回空数据".to_string())
 }

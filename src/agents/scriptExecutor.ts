@@ -118,40 +118,44 @@ async function executeOneStep(step: TestStep, onHealerLog: (log: HealerLog) => v
     return;
   }
 
-  // 构建精准 CSS 选择器
-  const selector = buildCssSelector(target.strategy, target.value);
+  // ── 关键修复：不再预先转为 CSS，而是传语义格式给 sidecar ──
+  // 格式：strategy:value，例如 "placeholder:请选择直属部门"
+  // sidecar 的 7 级降级引擎收到后自己决定用哪种 Playwright 定位 API
+  // 对于 selector 策略，直接传原始 CSS（不加前缀）
+  const smartSelector = target.strategy === 'selector'
+    ? target.value
+    : `${target.strategy}:${target.value}`;
 
   onHealerLog({
     timestamp: new Date().toLocaleTimeString(),
     stepId: step.stepId,
     strategy: 'retry',
-    message: `🔍 [S${step.stepId}] 定位元素 [${target.strategy}="${target.value}"] → CSS: ${selector}`,
+    message: `🔍 [S${step.stepId}] 智能定位: ${target.strategy}="${target.value}" → 启动7级降级链`,
     resolved: true,
   });
 
   // 分发具体动作
   switch (action) {
     case 'click':
-      await executeBrowserAction('click', selector);
+      await executeBrowserAction('click', smartSelector);
       break;
     case 'hover':
-      await executeBrowserAction('hover', selector);
+      await executeBrowserAction('hover', smartSelector);
       break;
     case 'type':
-      await executeBrowserAction('type', selector, value ?? '');
+      await executeBrowserAction('type', smartSelector, value ?? '');
       break;
     case 'press':
-      await browserPress(selector, value ?? 'Enter');
+      await browserPress(smartSelector, value ?? 'Enter');
       break;
     case 'select':
-      await executeBrowserAction('select', selector, value);
+      await executeBrowserAction('select', smartSelector, value);
       break;
     case 'assert':
-      await executeBrowserAction('assert', selector, value);
+      await executeBrowserAction('assert', smartSelector, value);
       break;
     case 'scroll':
-      // 暂时用 click 替代 scroll
-      await executeBrowserAction('click', selector);
+      await executeBrowserAction('click', smartSelector);
       break;
     default:
       throw new Error(`未知动作类型: ${action}`);

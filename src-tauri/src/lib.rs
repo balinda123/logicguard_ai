@@ -34,6 +34,10 @@ pub fn run() {
       browser::browser_check_connection,
       browser::launch_chrome_cdp,
       browser::get_chrome_path,
+      // Stagehand AI 智能执行命令
+      browser::browser_act,
+      browser::browser_observe,
+      browser::browser_run_agent,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

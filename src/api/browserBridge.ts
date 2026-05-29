@@ -12,6 +12,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { PageContext, InteractiveElement } from '../types';
+import { getLlmConfig } from './llmBridge';
 
 // Rust 返回的字段名是 snake_case，前端 TypeScript 用 camelCase
 // 这个接口对应 browser.rs 里的 PageSnapshot 结构体
@@ -62,8 +63,10 @@ export async function checkBrowserConnection(): Promise<boolean> {
 
 // ─── 获取页面快照 ──────────────────────────────────────────────
 export async function getPageSnapshot(): Promise<PageContext> {
+  const config = getLlmConfig();
   const snapshot = await invoke<RustPageSnapshot>('browser_get_snapshot', {
     port: CDP_PORT,
+    config,
   });
 
   return {
@@ -83,10 +86,12 @@ export interface BrowserActionResult {
 }
 
 export async function browserClick(selector: string, timeout = 5000): Promise<BrowserActionResult> {
+  const config = getLlmConfig();
   return await invoke<BrowserActionResult>('browser_click', {
     selector,
     port: CDP_PORT,
     timeout,
+    config,
   });
 }
 
@@ -94,32 +99,40 @@ export async function browserClick(selector: string, timeout = 5000): Promise<Br
  * 鼠标悬停
  */
 export async function browserHover(selector: string): Promise<BrowserActionResult> {
+  const config = getLlmConfig();
   return await invoke<BrowserActionResult>('browser_hover', {
     selector,
     port: CDP_PORT,
+    config,
   });
 }
 
 export async function browserType(selector: string, value: string): Promise<BrowserActionResult> {
+  const config = getLlmConfig();
   return await invoke<BrowserActionResult>('browser_type', {
     selector,
     value,
     port: CDP_PORT,
+    config,
   });
 }
 
 export async function browserNavigate(url: string): Promise<BrowserActionResult> {
+  const config = getLlmConfig();
   return await invoke<BrowserActionResult>('browser_navigate', {
     url,
     port: CDP_PORT,
+    config,
   });
 }
 
 export async function browserAssert(selector: string, contains?: string): Promise<BrowserActionResult> {
+  const config = getLlmConfig();
   return await invoke<BrowserActionResult>('browser_assert', {
     selector,
     contains,
     port: CDP_PORT,
+    config,
   });
 }
 
@@ -129,10 +142,12 @@ export async function browserAssert(selector: string, contains?: string): Promis
 //    这个函数负责路由到正确的操作
 
 export async function browserPress(selector: string, key: string): Promise<BrowserActionResult> {
+  const config = getLlmConfig();
   return await invoke<BrowserActionResult>('browser_press', {
     selector,
     key,
     port: CDP_PORT,
+    config,
   });
 }
 
@@ -164,4 +179,33 @@ export async function executeBrowserAction(
     default:
       throw new Error(`不支持的 action 类型: ${action}`);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🤖 Stagehand-First API：用自然语言直接驱动 AI 浏览器操作
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Stagehand act：用自然语言指令让 AI 直接在当前页面执行操作
+ * 核心优势：AI 实时感知当前页面 DOM，自动定位元素，完美支持跨页面
+ */
+export async function browserAct(instruction: string): Promise<BrowserActionResult> {
+  const config = getLlmConfig();
+  return await invoke<BrowserActionResult>('browser_act', {
+    instruction,
+    port: CDP_PORT,
+    config,
+  });
+}
+
+/**
+ * Stagehand observe：用自然语言让 AI 观察当前页面有哪些可操作元素
+ */
+export async function browserObserve(instruction: string): Promise<any> {
+  const config = getLlmConfig();
+  return await invoke<any>('browser_observe', {
+    instruction,
+    port: CDP_PORT,
+    config,
+  });
 }

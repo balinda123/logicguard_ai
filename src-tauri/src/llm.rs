@@ -419,29 +419,52 @@ fn build_test_script_prompt(user_intent: &str, dom_snapshot: &str, page_url: &st
 
 当前浏览器页面: {}
 
-页面上所有可交互元素（包含标签、文字、占位符、坐标）:
+页面上所有可交互元素列表（注意每个元素前有类型标签）:
 {}
 
 用户需求: "{}"
 
 请将上述需求转化为一份完整的测试脚本。
 
-## 核心原则
-1. **元素定位的优先级**（从高到低，选最具唯一性的）:
-   - `placeholder`: input 标签的 placeholder 属性（最精准）
-   - `aria-label`: 元素的 aria-label 属性
-   - `name`: 表单元素的 name 属性
-   - `testid`: data-testid 属性
-   - `text`: 按钮/链接的精确文字（当文字在全页面唯一时使用）
-   - `selector`: 原始 CSS 选择器（最后选项）
+## 元素类型说明（非常重要）
+元素列表中每个元素都有明确的类型标签，你必须根据类型选择正确的动作：
+- `[DROPDOWN]` → 原生 HTML 下拉框，使用 `select` 动作，value 填要选择的选项文字
+- `[INPUT] placeholder="请选择..."` → **自定义下拉选择器**（Vue/React 组件），使用 `click` 打开，再用 `click` 点击选项文字，**绝对不要用 type 或 select**
+- `[INPUT] placeholder="请输入..."` → 普通文字输入框，使用 `type` 动作
+- `[BUTTON]`   → 按钮，使用 `click` 动作
+- `[LINK]`     → 链接，使用 `click` 动作
+- `[CHECKBOX]` → 复选框，使用 `click` 动作
 
-2. **绝对禁止**: 不要使用模糊的文字描述（如"点击搜索按钮"），必须用上方列表中的具体元素特征来定位。
+## 意图匹配规则（最关键！）
+**必须严格将用户意图与 placeholder/label 匹配：**
+- 用户说"筛选/选择部门" → 找 placeholder 包含"部门"的输入框（如 `placeholder="请选择直属部门"`）
+- 用户说"输入工号" → 找 placeholder 包含"工号"的输入框（如 `placeholder="请输入员工工号/姓名"`）
+- **同一页面可能有多个输入框，必须通过 placeholder 中的关键词精准区分，绝不能搞混！**
 
-3. **回车键搜索**: 如果用户说"搜索"，且输入框没有独立的搜索按钮，使用 `press` 动作 + `Enter` 键，不要去找搜索按钮。
+## 自定义下拉框与级联选择器（Cascader/Tree Select）交互模式（可搜索与多步法说明）
+当页面包含自定义下拉框（Vue/React 级联选择器或树形选择器，通常带有 `placeholder="请选择..."`）且用户需要选择嵌套的子级部门或选项（如 "人力资源中心"）时，你必须根据该选择器是否支持输入搜索来选择最佳模式：
+1. **输入搜索法（首选且最推荐，尤其适用于组织架构部门树）**：如果下拉框（如 `placeholder="请选择直属部门"`) 支持输入搜索或带有搜索输入框，并且要选择的节点是嵌套较深的子部门（比如“人力资源中心”），**最稳健且 100% 成功**的做法是：
+   * 第一步：点击该下拉触发框（如：`click` 策略 `placeholder`，值 `"请选择直属部门"`）以打开并激活下拉浮层。
+   * 第二步：在同一个定位元素中输入要搜索的文本进行过滤（如：`type` 策略 `placeholder`，值 `"请选择直属部门"`，输入的 `value` 填 `"人力资源中心"`），此时执行器会自动寻找其内部的 input 完成输入并过滤出目标节点。
+   * 第三步：点击过滤后出现的唯一选项节点（如：`click` 策略 `text`，值 `"人力资源中心"`）完成选择。
+2. **逐层点击法（备选）**：如果下拉框是静态的多级联级菜单且无法搜索，必须按层级逐一生成点击步骤，绝对不能跳过中间层级：
+   * 第一步：点击下拉触发框打开浮层。
+   * 第二步：点击一级父选项（如 `text` 值 `"游戏业务"`) 展开二级菜单。
+   * 第三步：点击子选项（如 `text` 值 `"游戏一代"`) 完成选择。
+每一层级作为一个独立的步骤生成。
 
-4. **导航**: 如果用户说"进入/打开/访问某页面"，使用 `navigate` 动作，target 填 URL。
+## 元素定位策略优先级
+1. `placeholder`：最精准，直接用 placeholder 文字匹配
+2. `aria-label`：aria-label 属性
+3. `text`：按钮/选项的精确文字
+4. `selector`：最后手段
 
-5. 每个步骤后面的 `target.description` 必须用中文解释"这是哪个输入框/按钮"。
+## 其他规则
+- **回车搜索**: 先 `type` 输入内容，再 `press` + `Enter`
+- **系统内导航优先使用点击**: 当用户表示"进入/打开/访问系统内的某个子页面/报表"时，如果当前页面上有对应的菜单、标签页、链接或按钮（例如顶部或左侧的 "报表中心"、"绩效报表" 菜单），**必须优先生成点击（click）该菜单的步骤**，让系统自然跳转！绝对不要闭眼盲猜一个可能不存在的子页面路由网址进行 `navigate`！只有在最初打开系统首页或登录页时，才允许使用 `navigate` 动作。
+- **绝对禁止**: 将不同字段的 placeholder 混淆使用
+- **中文按钮空格处理**: 在 Ant Design 等组件库中，两个字的中文按钮（如“查询”、“导出”）中间可能会被渲染空格（如 `"查 询"`、`"导 出"`）。在生成 `text` 定位策略时，**必须**使用包含空格的真实文本，或者使用模糊匹配。
+- **避免同名冲突**: 当用户点击下拉框内的选项时，策略应为 `text`，值应为选项文字。系统执行器会自动优先在下拉框内查找，防止与左侧树形导航或页面其他文字冲突。
 
 ## 输出格式
 请只输出以下 JSON 格式，不要输出任何其他文字:
@@ -454,13 +477,13 @@ fn build_test_script_prompt(user_intent: &str, dom_snapshot: &str, page_url: &st
     {{
       "stepId": 1,
       "description": "<清晰的中文步骤描述>",
-      "action": "<click|type|press|hover|navigate|scroll|wait|assert>",
+      "action": "<click|type|press|select|hover|navigate|scroll|wait|assert>",
       "target": {{
         "strategy": "<placeholder|aria-label|name|testid|text|selector>",
         "value": "<对应属性的值>",
-        "description": "<中文说明这是什么元素>"
+        "description": "<中文说明这是什么元素，例如：部门筛选下拉框>"
       }},
-      "value": "<可选：type 时填输入内容，press 时填按键名如 Enter，assert 时填期望的文字>",
+      "value": "<type时填输入内容 / press时填按键名如Enter / select时填要选择的选项文字 / assert时填期望文字>",
       "status": "pending"
     }}
   ]
