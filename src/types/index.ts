@@ -25,6 +25,9 @@ export interface InteractiveElement {
   selector: string;
   x?: number;
   y?: number;
+  ariaLabel?: string;
+  labelText?: string;
+  options?: string;
 }
 
 export interface PageContext {
@@ -108,6 +111,7 @@ export interface TestResult {
   stepsSuccess: number;
   reportMarkdown?: string;
   screenshot?: string;
+  duration?: number;
 }
 
 export interface SystemStatus {

@@ -10,7 +10,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { getLlmConfig } from '../api/llmBridge';
 import { getPageSnapshot } from '../api/browserBridge';
 import type { TestScript, TestStep } from '../types';
-import { compressDomForLlm } from '../utils/domCompressor';
 
 export interface GenerateScriptOptions {
   onProgress?: (msg: string) => void;

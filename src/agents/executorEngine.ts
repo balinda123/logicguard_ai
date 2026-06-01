@@ -1,4 +1,4 @@
-import type { PlanStep, PageContext, HealerLog, GeneratorOutput } from '../types';
+import type { PlanStep, PageContext, HealerLog } from '../types';
 import { generateAction, healStep } from '../api/llmBridge';
 import { getPageSnapshot, executeBrowserAction } from '../api/browserBridge';
 import { compressDomForLlm } from '../utils/domCompressor';
@@ -15,13 +15,19 @@ export async function executeTaskLoop(
   steps: PlanStep[],
   onStepUpdate: (step: PlanStep) => void,
   onHealerLog: (log: HealerLog) => void,
-  onPageUpdate: (page: PageContext) => void
+  onPageUpdate: (page: PageContext) => void,
+  checkPause?: () => Promise<void>
 ): Promise<void> {
   for (const step of steps) {
     if (step.status === 'success') continue;
 
+    // 暂停挂起检查
+    if (checkPause) {
+      await checkPause();
+    }
+
     // 1. 标记当前步骤为进行中
-    const currentStep = { ...step, status: 'running' as const };
+    const currentStep = { ...step, status: 'running' as PlanStep['status'] };
     onStepUpdate(currentStep);
 
     let maxRetries = 3;

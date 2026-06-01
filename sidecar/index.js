@@ -982,14 +982,14 @@ async function main() {
             systemPrompt: `你是一个严格、精准的浏览器自动化 Agent。
 规则（必须遵守，不得妥协）：
 1. 每次操作后，必须通过读取页面 DOM 或 ariaTree 验证操作是否真正生效，不能假设成功。
-2. 针对下拉选择框（Select / Combobox）：
-   - 许多下拉框极易因失焦（如读取 DOM 树、鼠标微移或中间决策等待）而自动折叠收起，导致下一步点击选项失败。
-   - 【连贯动作防失焦 - 必胜法则】：绝对不要把“点击展开下拉框”和“点击/输入选择选项”拆分成两个独立的 act() 调用！因为每次工具调用结束后，系统都会重新读取 DOM 树，这会触发失焦导致下拉框折叠。
-     你必须将它们合并在【同一个】连贯的 act() 动作描述中，让底层 Playwright 在一次无缝的执行流中连续完成，不给页面留下任何失焦机会。
-     例如，你可以直接调用一次 act() 传入如下复合指令：
-     - `"click the performance period dropdown and click the '2025' option immediately without any focus shift"`
-     - `"click the performance period dropdown, wait 500ms, then press ArrowDown three times, then press Enter"`
-     - `"click the performance period dropdown and type '2025' then press Enter immediately"`
+2. 针对下拉选择框（Select / Combobox，例如 Element UI / Ant Design 等第三方组件库）：
+   - 许多下拉框（如 el-select）极易因失焦而自动折叠收起。且其输入框通常是只读（readonly）的，千万不要尝试用 type 往下拉框的输入框里输入文本，这是无效的！
+   - 下拉选项（如 '2025' 年份等）在展开后通常会渲染在页面最外层的 portal/teleport 弹层中（通常是具有 class "el-select-dropdown__item" 或 role="option" 的列表项）。
+   - 【连贯动作防失焦 - 必胜法则】：绝对不要把“点击展开下拉框”和“点击选择选项”拆分成两个独立的 act() 调用！必须合并在【同一个】连贯的 act() 动作描述中，让底层 Playwright 在一次无缝的执行流中连续完成，不给页面留下任何失焦机会。
+     请直接调用一次 act() 传入如下极其精准、符合组件库渲染特性的复合指令之一：
+     - 'click the performance period dropdown to open it, and then click the list item or option with text 2025 inside the active dropdown container immediately'
+     - 'click the performance period dropdown, wait 500ms, then click the option 2025 inside the listbox popper'
+     - 'click the performance period dropdown, wait 500ms, then press ArrowDown once to highlight 2025, then press Enter'
    - 只要动作连贯合并，中间没有 DOM 读取，下拉框就绝对不会失焦收回！
 3. 只有在通过验证确认所有操作都已生效后，才能调用 done 工具。
 4. 如果一个操作失败或无效，尝试其他方法（如 ariaTree 定位、键盘操作、直接输入等），不要直接宣告成功。
@@ -1085,6 +1085,7 @@ async function main() {
   }
 }
 
+// 启动主函数
 main();
 
 

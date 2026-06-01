@@ -1,5 +1,6 @@
 mod llm;
 mod browser;
+mod reports;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,6 +18,9 @@ pub fn run() {
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_store::Builder::default().build())
     .invoke_handler(tauri::generate_handler![
+      // 本地报告文件持久化命令
+      reports::save_reports_to_file,
+      reports::load_reports_from_file,
       // LLM 大模型相关命令
       llm::test_llm_connection,
       llm::plan_task,

@@ -13,6 +13,7 @@ export interface ExecutorCallbacks {
   onStepUpdate: (step: TestStep) => void;
   onHealerLog: (log: HealerLog) => void;
   onComplete: () => void;
+  checkPause?: () => Promise<void>;
 }
 
 /**
@@ -51,9 +52,14 @@ export async function executeTestScript(
   script: TestScript,
   callbacks: ExecutorCallbacks
 ): Promise<void> {
-  const { onStepUpdate, onHealerLog, onComplete } = callbacks;
+  const { onStepUpdate, onHealerLog, onComplete, checkPause } = callbacks;
 
   for (const step of script.steps) {
+    // 暂停挂起检查
+    if (checkPause) {
+      await checkPause();
+    }
+
     // 标记为运行中
     const runningStep: TestStep = { ...step, status: 'running' };
     onStepUpdate(runningStep);

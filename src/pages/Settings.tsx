@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Cpu, Database, Sliders, Shield, RefreshCw, CheckCircle, XCircle, Key, Zap, Globe, Play } from 'lucide-react';
+import { Cpu, Database, Sliders, Shield, RefreshCw, CheckCircle, XCircle, Key, Zap, Globe } from 'lucide-react';
 import type { SystemStatus } from '../types';
 import { getLlmConfig, setLlmConfig, testLlmConnection } from '../api/llmBridge';
 import type { LlmConfig } from '../api/llmBridge';
@@ -29,17 +29,15 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus }) => {
   // Chrome CDP 一键启动状态
   const [chromeLaunchState, setChromeLaunchState] = useState<TestState>('idle');
   const [chromeLaunchMsg, setChromeLaunchMsg] = useState('');
-  const [cdpConnected, setCdpConnected] = useState(false);
 
   // 检查 CDP 连接状态
   const checkCdpConnection = async () => {
     try {
       const connected = await invoke<boolean>('browser_check_connection', { port: parseInt(cdpPort) });
-      setCdpConnected(connected);
       if (connected) setStatus(prev => ({ ...prev, tailscale: 'connected' }));
       else setStatus(prev => ({ ...prev, tailscale: 'disconnected' }));
     } catch {
-      setCdpConnected(false);
+      setStatus(prev => ({ ...prev, tailscale: 'disconnected' }));
     }
   };
 

@@ -33,6 +33,7 @@ export interface StagehandCallbacks {
   onStepUpdate: (step: StagehandStep) => void;
   onHealerLog: (log: HealerLog) => void;
   onComplete: () => void;
+  checkPause?: () => Promise<void>;
 }
 
 /**
@@ -44,9 +45,14 @@ export async function executeStagehandScript(
   script: StagehandScript,
   callbacks: StagehandCallbacks
 ): Promise<void> {
-  const { onStepUpdate, onHealerLog, onComplete } = callbacks;
+  const { onStepUpdate, onHealerLog, onComplete, checkPause } = callbacks;
 
   for (const step of script.steps) {
+    // 暂停挂起检查
+    if (checkPause) {
+      await checkPause();
+    }
+
     // 标记为运行中
     const runningStep: StagehandStep = { ...step, status: 'running' };
     onStepUpdate(runningStep);
@@ -59,7 +65,7 @@ export async function executeStagehandScript(
       resolved: false,
     });
 
-    let maxRetries = 2;
+    let maxRetries = 3;
     let attempt = 0;
     let success = false;
 
