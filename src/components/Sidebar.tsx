@@ -17,20 +17,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, statu
   ];
 
   return (
-    <aside className="w-64 border border-border rounded-2xl shadow-md bg-surface-1 flex flex-col h-full animate-slide-in select-none overflow-hidden shrink-0">
+    <aside className="w-52 border border-border rounded-2xl shadow-md bg-surface-1 flex flex-col h-full animate-slide-in select-none overflow-hidden shrink-0">
       {/* Brand Header */}
-      <div className="h-16 flex items-center px-6 gap-3 border-b border-border">
-        <div className="w-8 h-8 rounded-lg bg-brand-500 flex items-center justify-center glow">
+      <div className="h-16 flex items-center px-4 gap-2 border-b border-border">
+        <div className="w-8 h-8 rounded-lg bg-brand-500 flex items-center justify-center glow shrink-0">
           <Terminal className="w-5 h-5 text-white" />
         </div>
-        <div>
-          <h1 className="font-bold text-sm tracking-wide text-text-primary">LogicGuard AI</h1>
-          <span className="text-[10px] text-text-muted font-medium uppercase tracking-wider">v1.0.0 Beta</span>
+        <div className="min-w-0">
+          <h1 className="font-bold text-xs tracking-wide text-text-primary truncate">LogicGuard AI</h1>
+          <span className="text-[9px] text-text-muted font-medium uppercase tracking-wider block -mt-0.5">v1.0.0 Beta</span>
         </div>
       </div>
 
       {/* Navigation Links */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      <nav className="flex-1 px-2.5 py-4 space-y-1 overflow-y-auto">
         {menuItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
@@ -38,14 +38,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, statu
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200 group ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-xs font-medium transition-all duration-200 group ${
                 isActive
                   ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20'
                   : 'text-text-secondary hover:bg-surface-2 hover:text-text-primary border border-transparent'
               }`}
             >
-              <Icon className={`w-4 h-4 transition-transform group-hover:scale-105 ${isActive ? 'text-brand-400' : 'text-text-muted group-hover:text-text-secondary'}`} />
-              {item.label}
+              <Icon className={`w-3.5 h-3.5 transition-transform group-hover:scale-105 shrink-0 ${isActive ? 'text-brand-400' : 'text-text-muted group-hover:text-text-secondary'}`} />
+              <span className="truncate">{item.label}</span>
             </button>
           );
         })}

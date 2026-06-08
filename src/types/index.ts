@@ -78,6 +78,15 @@ export interface HealerLog {
   resolved: boolean;
 }
 
+/** 参数集：一组具体的变量值，用于对同一模板进行多轮不同参数的重复测试 */
+export interface ParameterSet {
+  id: string;
+  name: string;                       // 如 "测试场景：管理员角色"
+  values: Record<string, string>;     // 变量名 → 具体值
+  lastRunStatus?: 'success' | 'failed' | 'pending';
+  lastRunAt?: string;                 // ISO 时间字符串
+}
+
 export interface ScenarioTemplate {
   id: string;
   name: string;
@@ -98,6 +107,12 @@ export interface ScenarioTemplate {
     defaultValue?: string;
   }[];
   tags: string[];
+  /** 可配置的多组参数集，用于重复测试 */
+  parameterSets?: ParameterSet[];
+  /** 生成该模板的需求文档片段（前500字，仅AI生成模板有） */
+  sourceDocument?: string;
+  /** AI 生成时间戳 */
+  generatedAt?: string;
 }
 
 export interface TestResult {

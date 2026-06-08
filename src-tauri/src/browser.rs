@@ -258,6 +258,41 @@ pub fn browser_get_snapshot(port: Option<u16>, config: Option<LlmConfig>) -> Res
     Ok(PageSnapshot { url, title, interactive_elements: elements })
 }
 
+/// 读取页面纯文本内容（用于需求文档解析，零 token 消耗，不调用 AI）
+///
+/// 支持 keyword 关键词过滤：只返回包含关键词的段落及前后上下文。
+/// 前端调用: await invoke('browser_get_page_content', { port: 9222, keyword: '请假申请' })
+#[command]
+pub fn browser_get_page_content(port: Option<u16>, keyword: Option<String>, config: Option<LlmConfig>) -> Result<serde_json::Value, String> {
+    let cdp_port = port.unwrap_or(9222).to_string();
+
+    let mut sidecar_args = vec![
+        "get_page_content".to_string(),
+        format!("--port={}", cdp_port),
+    ];
+
+    if let Some(ref kw) = keyword {
+        if !kw.trim().is_empty() {
+            sidecar_args.push(format!("--keyword={}", kw.trim()));
+        }
+    }
+
+    let raw = run_sidecar_with_config(sidecar_args, config)?;
+
+    let json_line = raw.lines()
+        .find(|line| line.trim().starts_with("{\"ok\":") || (line.trim().starts_with("{") && line.trim().contains("\"ok\"")))
+        .ok_or_else(|| format!("get_page_content 无有效响应。\n原始输出: {}", &raw[..raw.len().min(500)]))?;
+
+    let response: SidecarResponse<serde_json::Value> = serde_json::from_str(json_line)
+        .map_err(|e| format!("解析页面内容响应失败: {}", e))?;
+
+    if !response.ok {
+        return Err(response.error.unwrap_or_else(|| "读取页面内容失败".to_string()));
+    }
+
+    response.data.ok_or_else(|| "页面内容为空".to_string())
+}
+
 /// 执行浏览器点击操作
 /// 📚 前端调用: await invoke('browser_click', { selector: '#btn-submit', port: 9222 })
 #[command]
@@ -539,6 +574,38 @@ pub struct AgentStepEvent {
     pub timestamp: String,
 }
 
+use std::sync::Mutex;
+use std::sync::OnceLock;
+
+fn running_agent_pid() -> &'static Mutex<Option<u32>> {
+    static PID: OnceLock<Mutex<Option<u32>>> = OnceLock::new();
+    PID.get_or_init(|| Mutex::new(None))
+}
+
+#[command]
+pub fn browser_terminate_agent() -> Result<(), String> {
+    if let Ok(mut pid_guard) = running_agent_pid().lock() {
+        if let Some(pid) = pid_guard.take() {
+            #[cfg(unix)]
+            {
+                let _ = std::process::Command::new("kill")
+                    .arg("-9")
+                    .arg(pid.to_string())
+                    .status();
+            }
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("taskkill")
+                    .arg("/F")
+                    .arg("/PID")
+                    .arg(pid.to_string())
+                    .status();
+            }
+        }
+    }
+    Ok(())
+}
+
 /// 启动 Stagehand 原生闭环 Agent，实时向前端推送每一步的动作
 /// 
 /// 工作原理：
@@ -554,7 +621,7 @@ pub fn browser_run_agent(
     app: tauri::AppHandle,
     instruction: String,
     port: Option<u16>,
-    config: Option<LlmConfig>,
+    config: Option<LlmConfig>,  
 ) -> Result<serde_json::Value, String> {
     let cdp_port = port.unwrap_or(9222).to_string();
     let node_cmd = "node";
@@ -608,8 +675,18 @@ pub fn browser_run_agent(
     let mut child = cmd.spawn()
         .map_err(|e| format!("启动 Agent sidecar 失败: {}", e))?;
 
+    // 保存 PID 到全局
+    if let Ok(mut pid_guard) = running_agent_pid().lock() {
+        *pid_guard = Some(child.id());
+    }
+
     let stdout = child.stdout.take()
-        .ok_or_else(|| "无法获取 sidecar stdout".to_string())?;
+        .ok_or_else(|| {
+            if let Ok(mut pid_guard) = running_agent_pid().lock() {
+                *pid_guard = None;
+            }
+            "无法获取 sidecar stdout".to_string()
+        })?;
 
     let reader = BufReader::new(stdout);
     let mut all_output_lines: Vec<String> = Vec::new();
@@ -631,6 +708,11 @@ pub fn browser_run_agent(
             }
             Err(_) => break,
         }
+    }
+
+    // 清除 PID 保存
+    if let Ok(mut pid_guard) = running_agent_pid().lock() {
+        *pid_guard = None;
     }
 
     // 等待子进程结束

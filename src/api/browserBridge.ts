@@ -61,6 +61,33 @@ export async function checkBrowserConnection(): Promise<boolean> {
   }
 }
 
+// ─── 读取页面纯文本内容（零 AI token 消耗）────────────────────────
+
+/** 读取当前 CDP 页面的纯文本内容，用于需求文档解析。
+ * 
+ * @param keyword 可选关键词，若提供则只返回包含该关键词的段落（及前后各1段作为上下文）
+ *                不提供则返回全页文字（最多20000字符）
+ * 
+ * ⚡ 完全不调用 AI，是纯本地 CDP 操作，零 token 消耗。
+ *    只有最终把返回内容发给 LLM 时才会消耗 token。
+ */
+export async function getPageContent(keyword?: string): Promise<{
+  url: string;
+  title: string;
+  content: string;
+  totalChars: number;
+  filteredChars: number;
+  keyword: string | null;
+  paragraphCount: number;
+}> {
+  const config = getLlmConfig();
+  return await invoke('browser_get_page_content', {
+    port: CDP_PORT,
+    keyword: keyword?.trim() || null,
+    config,
+  });
+}
+
 // ─── 获取页面快照 ──────────────────────────────────────────────
 export async function getPageSnapshot(): Promise<PageContext> {
   const config = getLlmConfig();

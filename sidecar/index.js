@@ -18,15 +18,38 @@
  */
 
 const { chromium } = require('playwright');
+const { JSDOM } = require('jsdom');
+const { Readability } = require('@mozilla/readability');
+
+// 全局共享 page 引用，用于在进程退出时清理虚拟光标
+let globalPage = null;
 
 // 工具函数：输出成功结果并退出
-function ok(data) {
+async function ok(data) {
+  if (globalPage) {
+    try {
+      await globalPage.evaluate(() => {
+        const root = document.getElementById('__logicguard_ai_cursor_root__');
+        if (root) root.remove();
+        window.__lg_cursor_injected = false;
+      });
+    } catch (e) {}
+  }
   console.log(JSON.stringify({ ok: true, data }));
   process.exit(0);
 }
 
 // 工具函数：输出错误并退出
-function fail(error) {
+async function fail(error) {
+  if (globalPage) {
+    try {
+      await globalPage.evaluate(() => {
+        const root = document.getElementById('__logicguard_ai_cursor_root__');
+        if (root) root.remove();
+        window.__lg_cursor_injected = false;
+      });
+    } catch (e) {}
+  }
   console.log(JSON.stringify({ ok: false, error: String(error) }));
   process.exit(1);
 }
@@ -36,7 +59,7 @@ function fail(error) {
 function parseArgs(args) {
   const result = {};
   for (const arg of args) {
-    const match = arg.match(/^--([^=]+)=(.*)$/);
+    const match = arg.match(/^--([^=]+)=([\s\S]*)$/);
     if (match) result[match[1]] = match[2];
   }
   return result;
@@ -50,6 +73,183 @@ async function getWsUrl(port) {
     return data.webSocketDebuggerUrl;
   } catch (e) {
     throw new Error(`无法获取 CDP WebSocket URL (请确认 Chrome 是否已在 ${port} 端口开启调试模式): ${e.message}`);
+  }
+}
+
+// 🤖 注入 AI 智能操作虚拟光标
+async function setupVirtualCursor(context, page) {
+  const injectScript = () => {
+    // 避免在同一个页面重复注入
+    if (window.__lg_cursor_injected) return;
+    window.__lg_cursor_injected = true;
+
+    // 创建虚拟光标的根节点
+    const root = document.createElement('div');
+    root.id = '__logicguard_ai_cursor_root__';
+    
+    // 注入精美的虚拟光标及波纹效果样式
+    const style = document.createElement('style');
+    style.textContent = `
+      .__lg_cursor {
+        position: fixed;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: radial-gradient(circle, #ff5e62 0%, #ff9966 100%);
+        box-shadow: 0 0 10px rgba(255, 94, 98, 0.8), 0 0 20px rgba(255, 153, 102, 0.4);
+        z-index: 2147483647;
+        pointer-events: none;
+        left: -100px;
+        top: -100px;
+        transform: translate(-50%, -50%) scale(1);
+        transition: left 0.5s cubic-bezier(0.19, 1, 0.22, 1), top 0.5s cubic-bezier(0.19, 1, 0.22, 1), transform 0.1s ease;
+      }
+      .__lg_cursor::after {
+        content: '';
+        position: absolute;
+        width: 28px;
+        height: 28px;
+        border: 2px solid rgba(255, 94, 98, 0.6);
+        border-radius: 50%;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        animation: __lg_pulse 1.5s infinite ease-out;
+      }
+      .__lg_cursor_label {
+        position: absolute;
+        left: 22px;
+        top: 3px;
+        background: rgba(15, 23, 42, 0.9);
+        color: #f8fafc;
+        padding: 3px 8px;
+        border-radius: 6px;
+        font-family: system-ui, -apple-system, sans-serif;
+        font-size: 10px;
+        font-weight: 600;
+        white-space: nowrap;
+        border: 1px solid rgba(255, 94, 98, 0.3);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+      }
+      .__lg_ripple {
+        position: fixed;
+        border: 3px solid #ff5e62;
+        border-radius: 50%;
+        pointer-events: none;
+        z-index: 2147483646;
+        transform: translate(-50%, -50%) scale(0);
+        opacity: 1;
+        transition: transform 0.4s cubic-bezier(0.1, 0.8, 0.3, 1), opacity 0.4s ease-out;
+      }
+      @keyframes __lg_pulse {
+        0% {
+          transform: translate(-50%, -50%) scale(0.8);
+          opacity: 0.8;
+        }
+        100% {
+          transform: translate(-50%, -50%) scale(1.6);
+          opacity: 0;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+
+    const cursor = document.createElement('div');
+    cursor.className = '__lg_cursor';
+    
+    const label = document.createElement('div');
+    label.className = '__lg_cursor_label';
+    label.innerHTML = '🤖 AI 智能操作中...';
+    cursor.appendChild(label);
+    
+    root.appendChild(cursor);
+    document.documentElement.appendChild(root);
+  };
+
+  // 1. 注册 init script，确保未来页面跳转、重载后仍能自动运行
+  try {
+    await context.addInitScript(injectScript);
+  } catch (e) {
+    console.warn('[sidecar] 注册 init script 失败:', e.message);
+  }
+
+  // 2. 在当前已加载活跃标签页中立即触发注入
+  try {
+    await page.evaluate(injectScript);
+  } catch (e) {
+    console.warn('[sidecar] 立即注入虚拟光标失败:', e.message);
+  }
+
+  // 3. 拦截 page.mouse 操作，使虚拟光标仅跟随 AI，绝不跟随真实用户的物理鼠标
+  try {
+    if (page.mouse && !page.mouse.__is_wrapped) {
+      page.mouse.__is_wrapped = true;
+
+      const originalMouseMove = page.mouse.move.bind(page.mouse);
+      page.mouse.move = async (x, y, options) => {
+        await page.evaluate(({ x, y }) => {
+          const cursor = document.querySelector('.__lg_cursor');
+          if (cursor) {
+            cursor.style.left = `${x}px`;
+            cursor.style.top = `${y}px`;
+          }
+        }, { x, y }).catch(() => {});
+        return originalMouseMove(x, y, options);
+      };
+
+      const originalMouseDown = page.mouse.down.bind(page.mouse);
+      page.mouse.down = async (options) => {
+        await page.evaluate(() => {
+          const cursor = document.querySelector('.__lg_cursor');
+          if (cursor) {
+            cursor.style.transform = 'translate(-50%, -50%) scale(0.8)';
+            const root = document.getElementById('__logicguard_ai_cursor_root__');
+            if (root) {
+              const x = parseFloat(cursor.style.left) || 0;
+              const y = parseFloat(cursor.style.top) || 0;
+              const ripple = document.createElement('div');
+              ripple.className = '__lg_ripple';
+              ripple.style.left = `${x}px`;
+              ripple.style.top = `${y}px`;
+              ripple.style.width = '35px';
+              ripple.style.height = '35px';
+              root.appendChild(ripple);
+              requestAnimationFrame(() => {
+                ripple.style.transform = 'translate(-50%, -50%) scale(2.2)';
+                ripple.style.opacity = '0';
+              });
+              setTimeout(() => ripple.remove(), 450);
+            }
+          }
+        }).catch(() => {});
+        return originalMouseDown(options);
+      };
+
+      const originalMouseUp = page.mouse.up.bind(page.mouse);
+      page.mouse.up = async (options) => {
+        await page.evaluate(() => {
+          const cursor = document.querySelector('.__lg_cursor');
+          if (cursor) cursor.style.transform = 'translate(-50%, -50%) scale(1)';
+        }).catch(() => {});
+        return originalMouseUp(options);
+      };
+    }
+  } catch (e) {
+    console.warn('[sidecar] 拦截 page.mouse 失败:', e.message);
+  }
+}
+
+// 🤖 清理虚拟光标 DOM 节点
+async function cleanupVirtualCursor(page) {
+  if (!page) return;
+  try {
+    await page.evaluate(() => {
+      const root = document.getElementById('__logicguard_ai_cursor_root__');
+      if (root) root.remove();
+      window.__lg_cursor_injected = false;
+    });
+  } catch (e) {
+    // 忽略异常（例如页面已关闭）
   }
 }
 
@@ -112,10 +312,252 @@ async function main() {
     page = validPages.length > 0 ? validPages[0] : pages[pages.length - 1];
   }
 
+  // 暂存全局变量，供进程退出时清理虚拟光标 DOM 节点
+  globalPage = page;
+
+  // 🤖 注入 AI 智能操作虚拟光标（非阻塞调用，防止 CDP 繁忙导致系统卡住）
+  setupVirtualCursor(contexts[0], page).catch(err => {
+    console.warn('[sidecar] 虚拟光标注入失败:', err.message);
+  });
 
   // ─── 执行具体命令 ─────────────────────────────────────────────
   try {
     switch (command) {
+
+      // 📄 读取页面纯文本内容（用于需求文档解析，不调用AI，零token消耗）
+      // 支持 keyword 参数做段落级过滤，只返回包含关键词的段落
+      // 用法: node index.js get_page_content --port=9222 [--keyword=请假申请]
+      case 'get_page_content': {
+        const url = page.url();
+        const title = await page.title();
+
+        // 获取页面可见文字（对在线文档系统和单页应用最安全、最完整的方案）
+        let rawText = '';
+        try {
+          rawText = await page.innerText('body');
+        } catch (e) {
+          // fallback：某些 SPA 页面 body 可能还未渲染，用 textContent
+          rawText = await page.evaluate(() => document.body.textContent || '');
+        }
+
+        // 清理多余空白：连续 3 个以上换行压缩为 2 个，去掉行首尾多余空格
+        rawText = rawText
+          .replace(/\r\n/g, '\n')
+          .replace(/[ \t]+/g, ' ')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+
+        const keyword = args.keyword ? args.keyword.trim() : '';
+
+        let filteredText = rawText;
+        let totalChars = rawText.length;
+        let filteredChars = rawText.length;
+
+        // ── 智能关键词章节提取（支持大纲匹配与内容级定位）────
+        if (keyword) {
+          const keywordLower = keyword.toLowerCase();
+          const lines = rawText.split('\n');
+          const candidates = [];
+
+          const headingPatterns = [
+            {
+              type: 'markdown',
+              regex: /^\s*(#{1,6})\s+(.+)$/,
+              getLevel: (match) => match[1].length,
+              isSameOrHigher: (lvl, nextMatch) => nextMatch[1].length <= lvl
+            },
+            {
+              type: 'numbered',
+              // 限制序号数字最多为 2 位（1-99），避免匹配 2025 年份或 200 字等数量词，且后面必须有分隔符
+              regex: /^\s*(\d{1,2}(?:\.\d{1,2})*)\s*([\.、．\s])\s*(.+)$/,
+              getLevel: (match) => match[1].split('.').length,
+              isSameOrHigher: (lvl, nextMatch, startMatch) => {
+                if (startMatch) {
+                  const startFirst = parseInt(startMatch[1].split('.')[0], 10);
+                  const nextFirst = parseInt(nextMatch[1].split('.')[0], 10);
+                  // 只有当下一个标题的起始主序号大于等于当前章节时才算同级/高级（防止内容被子级列表 1. 2. 3. 截断）
+                  if (nextFirst < startFirst) return false;
+                }
+                return nextMatch[1].split('.').length <= lvl;
+              }
+            },
+            {
+              type: 'chinese',
+              regex: /^\s*([一二三四五六七八九十]+)\s*([\.、．\s])\s*(.+)$/,
+              getLevel: () => 1,
+              isSameOrHigher: () => true
+            }
+          ];
+
+          const keywordClean = keywordLower.replace(/[\s\.\-、．:：_＿#\\\/【】\[\]\(\)（）]/g, '');
+
+          // 找到所有匹配关键词的行
+          for (let i = 0; i < lines.length; i++) {
+            const lineClean = lines[i].toLowerCase().replace(/[\s\.\-、．:：_＿#\\\/【】\[\]\(\)（）]/g, '');
+            if (lineClean.includes(keywordClean)) {
+              let startLineIdx = i;
+              let matchedPattern = null;
+              let matchedMatch = null;
+
+              // 1. 检查当前行本身是否匹配某类标题
+              for (const p of headingPatterns) {
+                const m = lines[i].match(p.regex);
+                if (m) {
+                  matchedPattern = p;
+                  matchedMatch = m;
+                  break;
+                }
+              }
+
+              // 2. 如果当前行不是标题，向上寻找最近的标题（最多寻找50行）
+              if (!matchedPattern) {
+                for (let j = i - 1; j >= Math.max(0, i - 50); j--) {
+                  for (const p of headingPatterns) {
+                    const m = lines[j].match(p.regex);
+                    if (m) {
+                      matchedPattern = p;
+                      matchedMatch = m;
+                      startLineIdx = j;
+                      break;
+                    }
+                  }
+                  if (matchedPattern) break;
+                }
+              }
+
+              // 3. 如果找到了对应的章节标题，提取从它开始，直到遇到下一个同级或更高层级标题的内容
+              if (matchedPattern && matchedMatch) {
+                const level = matchedPattern.getLevel(matchedMatch);
+                const collected = [];
+                collected.push(lines[startLineIdx]);
+
+                let endLineIdx = lines.length;
+                for (let k = startLineIdx + 1; k < lines.length; k++) {
+                  const line = lines[k];
+                  const nextMatch = line.match(matchedPattern.regex);
+                  // 遇到同类型且级别相同或更高的下一个标题时停止提取
+                  if (nextMatch && matchedPattern.isSameOrHigher(level, nextMatch, matchedMatch)) {
+                    endLineIdx = k;
+                    break;
+                  }
+                  collected.push(line);
+                }
+
+                candidates.push({
+                  content: collected.join('\n'),
+                  start: startLineIdx,
+                  end: endLineIdx,
+                  isHeading: true
+                });
+              } else {
+                // 4. 如果完全找不到任何关联标题，采用智能前缀上下文滑窗 fallback 机制
+                const start = Math.max(0, i - 2); // 包含前2行作为前置上下文
+                const collected = [];
+                let endLineIdx = lines.length;
+
+                // 获取匹配行的前缀特征（例如 "通用配置"）
+                const matchedLine = lines[i].trim();
+                const prefixMatch = matchedLine.match(/^([^\s\-\—\:\：]+)/);
+                const matchedPrefix = prefixMatch ? prefixMatch[1] : '';
+
+                for (let k = start; k < lines.length; k++) {
+                  // 限制最大向下提取 100 行（足够容纳一个大模块，且避免 Token 溢出）
+                  if (k - start > 100) {
+                    endLineIdx = k;
+                    break;
+                  }
+
+                  const line = lines[k].trim();
+
+                  // 如果不是起始行本身，且遇到了其他明显的标题或下一章节，则截止
+                  if (k > i && line) {
+                    // a) 遇到了任何明确定义的标题模式（如 9. 或 # 或 一、）
+                    let matchesAnyHeading = false;
+                    for (const p of headingPatterns) {
+                      if (line.match(p.regex)) {
+                        matchesAnyHeading = true;
+                        break;
+                      }
+                    }
+                    if (matchesAnyHeading) {
+                      endLineIdx = k;
+                      break;
+                    }
+
+                    // b) 遇到了相同大类的前缀特征行（例如另一个以 "通用配置" 开头的章节标题）
+                    if (matchedPrefix && line.startsWith(matchedPrefix) && line !== matchedLine) {
+                      // 确保该行足够短（通常标题小于 40 字符，非正文长句段落）
+                      if (line.length < 40) {
+                        endLineIdx = k;
+                        break;
+                      }
+                    }
+                  }
+
+                  collected.push(lines[k]);
+                }
+
+                candidates.push({
+                  content: collected.join('\n'),
+                  start,
+                  end: endLineIdx,
+                  isHeading: false
+                });
+              }
+            }
+          }
+
+          // 提取文档大纲 (所有标题) 以便 AI 理解页面所属菜单的父子层级结构
+          const docOutline = [];
+          for (let idx = 0; idx < lines.length; idx++) {
+            for (const p of headingPatterns) {
+              if (lines[idx].match(p.regex)) {
+                const textTrim = lines[idx].trim();
+                if (textTrim) {
+                  docOutline.push(textTrim);
+                }
+                break;
+              }
+            }
+          }
+
+          if (candidates.length > 0) {
+            // 选择内容最丰富的那个候选区域（这能有效避开目录/导航条中仅有一行的干扰匹配，精准定位到真正的正文内容）
+            candidates.sort((a, b) => b.content.length - a.content.length);
+            const bodyContent = candidates[0].content;
+            
+            // 拼装大纲目录前缀
+            let outlineHeader = '';
+            if (docOutline.length > 0) {
+              // 限制前80条大纲，避免超长
+              outlineHeader = `[需求文档全局导航目录大纲（请对照它识别当前章节所处的父级菜单/功能分类）]:\n${docOutline.slice(0, 80).map(l => ' - ' + l).join('\n')}\n\n========================================\n\n[当前测试目标章节正文]:\n`;
+            }
+            
+            filteredText = outlineHeader + bodyContent;
+            filteredChars = filteredText.length;
+          } else {
+            filteredText = `⚠️ 未能在当前页面中找到包含 "${keyword}" 的有效章节。\n\n建议：\n1. 请检查所填章节的文字是否与页面显示完全吻合。\n2. 您可以尝试只输入最简短的核心词（例如：仅输入 "评分权重"），系统会模糊搜索整页并向上自动为您定位章节范围。`;
+            filteredChars = filteredText.length;
+          }
+        }
+
+        // 硬限制 20000 字符（防止超 LLM context 窗口）
+        const MAX_CHARS = 20000;
+        if (filteredText.length > MAX_CHARS) {
+          filteredText = filteredText.slice(0, MAX_CHARS) + '\n\n...(内容过长，已截断)';
+        }
+
+        ok({
+          url,
+          title,
+          content: filteredText,
+          totalChars,
+          filteredChars: Math.min(filteredChars, MAX_CHARS),
+          keyword: keyword || null,
+          paragraphCount: filteredText.split('\n\n').length,
+        });
+        break;
+      }
 
       // 📡 获取页面快照（双引擎：无障碍树AX + DOM 互补）
       case 'get_snapshot': {
@@ -1000,6 +1442,8 @@ async function main() {
           const result = await agent.execute({
             instruction,
             maxSteps: 50, // 最多 50 步，给予复杂多步骤交互与自愈充足的步骤额度
+            // 启用视觉鼠标跟随效果，在页面中绘制 AI 操作轨迹
+            highlightCursor: true,
             // 禁用截图工具，完全依赖 DOM 感知，节省 token 且更准确
             excludeTools: ['screenshot'],
             callbacks: {
@@ -1080,6 +1524,8 @@ async function main() {
   } catch (e) {
     fail(`执行命令 "${command}" 失败: ${e.message}`);
   } finally {
+    // 进程退出前清理虚拟光标 DOM 节点
+    await cleanupVirtualCursor(page);
     // disconnect 而不是 close，让 Chrome 继续正常运行
     await browser.close(); // 对于 connectOverCDP，close() 实际上是 disconnect
   }

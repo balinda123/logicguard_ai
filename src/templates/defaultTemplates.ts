@@ -17,7 +17,27 @@ export const defaultTemplates: ScenarioTemplate[] = [
       { name: 'loginUrl', label: '统一登录地址', type: 'text', required: true, defaultValue: 'https://sso.company.com/sso' },
       { name: 'username', label: '登录账号（参考）', type: 'text', required: false, defaultValue: 'admin@company.com' }
     ],
-    tags: ['SSO', '登录', '企业门户', 'MFA绕过']
+    tags: ['SSO', '登录', '企业门户', 'MFA绕过'],
+    parameterSets: [
+      {
+        id: 'ps_oa_admin',
+        name: '管理员角色测试',
+        values: {
+          loginUrl: 'https://sso.company.com/sso',
+          username: 'admin@company.com'
+        },
+        lastRunStatus: 'success',
+        lastRunAt: '2026-06-03T11:20:00.000Z'
+      },
+      {
+        id: 'ps_oa_member',
+        name: '普通员工角色测试',
+        values: {
+          loginUrl: 'https://sso.company.com/sso',
+          username: 'user@company.com'
+        }
+      }
+    ]
   },
   {
     id: 'tpl_form_reimbursement',
@@ -36,13 +56,31 @@ export const defaultTemplates: ScenarioTemplate[] = [
       { name: 'amount', label: '报销总金额', type: 'text', required: true, defaultValue: '1280.00' },
       { name: 'reason', label: '报销事由说明', type: 'text', required: true, defaultValue: '采购本地GPU测试算力代垫款项' }
     ],
-    tags: ['财务', '表单填充', '附件上传']
+    tags: ['财务', '表单填充', '附件上传'],
+    parameterSets: [
+      {
+        id: 'ps_reimb_gpu',
+        name: 'GPU算力代垫报销',
+        values: {
+          amount: '1280.00',
+          reason: '采购本地GPU测试算力代垫款项'
+        }
+      },
+      {
+        id: 'ps_reimb_travel',
+        name: '北京出差交通报销',
+        values: {
+          amount: '450.00',
+          reason: '5月北京出差拜访客户打车与高铁票'
+        }
+      }
+    ]
   },
   {
     id: 'tpl_jira_issue',
     name: 'JIRA缺陷智能提单',
     category: 'form',
-    description: '将测试失败的堆栈信息和自动化截图直接提报到JIRA看板',
+    description: '将测试失败的堆栈信息 and 自动化截图直接提报到JIRA看板',
     targetUrl: 'https://jira.company.com/secure/CreateIssue',
     steps: [
       { order: 1, description: '打开新建缺陷对话框', action: 'click', selectorHint: '#create-menu' },
