@@ -65,7 +65,7 @@ export async function executeStagehandScript(
       resolved: false,
     });
 
-    let maxRetries = 3;
+    const maxRetries = 3;
     let attempt = 0;
     let success = false;
 

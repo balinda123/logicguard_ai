@@ -50,12 +50,24 @@ function mapElement(el: RustInteractiveElement): InteractiveElement {
 }
 
 // CDP 配置（可以从 Settings 读取，目前硬编码默认值）
-const CDP_PORT = 9222;
+function browserStorageKey(): string {
+  return `logicguard_browser_config_${sessionStorage.getItem('logicguard_user_id') ?? 'anonymous'}`;
+}
+
+export function getCdpPort(): number {
+  const stored = Number(localStorage.getItem(browserStorageKey()));
+  return Number.isInteger(stored) && stored >= 1024 && stored <= 65535 ? stored : 9222;
+}
+
+export function setCdpPort(port: number): void {
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('CDP 端口必须在 1024–65535 之间');
+  localStorage.setItem(browserStorageKey(), String(port));
+}
 
 // ─── 检查 Chrome CDP 连接 ─────────────────────────────────────
 export async function checkBrowserConnection(): Promise<boolean> {
   try {
-    return await invoke<boolean>('browser_check_connection', { port: CDP_PORT });
+    return await invoke<boolean>('browser_check_connection', { port: getCdpPort() });
   } catch {
     return false;
   }
@@ -82,7 +94,7 @@ export async function getPageContent(keyword?: string): Promise<{
 }> {
   const config = getLlmConfig();
   return await invoke('browser_get_page_content', {
-    port: CDP_PORT,
+    port: getCdpPort(),
     keyword: keyword?.trim() || null,
     config,
   });
@@ -92,7 +104,7 @@ export async function getPageContent(keyword?: string): Promise<{
 export async function getPageSnapshot(): Promise<PageContext> {
   const config = getLlmConfig();
   const snapshot = await invoke<RustPageSnapshot>('browser_get_snapshot', {
-    port: CDP_PORT,
+    port: getCdpPort(),
     config,
   });
 
@@ -116,7 +128,7 @@ export async function browserClick(selector: string, timeout = 5000): Promise<Br
   const config = getLlmConfig();
   return await invoke<BrowserActionResult>('browser_click', {
     selector,
-    port: CDP_PORT,
+    port: getCdpPort(),
     timeout,
     config,
   });
@@ -129,7 +141,7 @@ export async function browserHover(selector: string): Promise<BrowserActionResul
   const config = getLlmConfig();
   return await invoke<BrowserActionResult>('browser_hover', {
     selector,
-    port: CDP_PORT,
+    port: getCdpPort(),
     config,
   });
 }
@@ -139,7 +151,7 @@ export async function browserType(selector: string, value: string): Promise<Brow
   return await invoke<BrowserActionResult>('browser_type', {
     selector,
     value,
-    port: CDP_PORT,
+    port: getCdpPort(),
     config,
   });
 }
@@ -148,7 +160,7 @@ export async function browserNavigate(url: string): Promise<BrowserActionResult>
   const config = getLlmConfig();
   return await invoke<BrowserActionResult>('browser_navigate', {
     url,
-    port: CDP_PORT,
+    port: getCdpPort(),
     config,
   });
 }
@@ -158,7 +170,7 @@ export async function browserAssert(selector: string, contains?: string): Promis
   return await invoke<BrowserActionResult>('browser_assert', {
     selector,
     contains,
-    port: CDP_PORT,
+    port: getCdpPort(),
     config,
   });
 }
@@ -173,7 +185,7 @@ export async function browserPress(selector: string, key: string): Promise<Brows
   return await invoke<BrowserActionResult>('browser_press', {
     selector,
     key,
-    port: CDP_PORT,
+    port: getCdpPort(),
     config,
   });
 }
@@ -220,7 +232,7 @@ export async function browserAct(instruction: string): Promise<BrowserActionResu
   const config = getLlmConfig();
   return await invoke<BrowserActionResult>('browser_act', {
     instruction,
-    port: CDP_PORT,
+    port: getCdpPort(),
     config,
   });
 }
@@ -232,7 +244,7 @@ export async function browserObserve(instruction: string): Promise<any> {
   const config = getLlmConfig();
   return await invoke<any>('browser_observe', {
     instruction,
-    port: CDP_PORT,
+    port: getCdpPort(),
     config,
   });
 }

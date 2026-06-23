@@ -236,11 +236,9 @@ pub async fn call_openai_compat(
 pub async fn route_llm(prompt: &str, config: &LlmConfig) -> Result<String, String> {
     match config.provider.as_str() {
         "gemini" => {
-            let api_key = config
-                .api_key
-                .as_deref()
-                .ok_or("Gemini API key not configured")?;
-            call_gemini(prompt, api_key, &config.model).await
+            let api_key = config.api_key.clone().map(Ok)
+                .unwrap_or_else(crate::auth::current_api_key)?;
+            call_gemini(prompt, &api_key, &config.model).await
         }
         "ollama" => {
             let base_url = config
@@ -250,15 +248,13 @@ pub async fn route_llm(prompt: &str, config: &LlmConfig) -> Result<String, Strin
             call_ollama(prompt, &config.model, base_url).await
         }
         "openai_compat" => {
-            let api_key = config
-                .api_key
-                .as_deref()
-                .ok_or("API key not configured")?;
+            let api_key = config.api_key.clone().map(Ok)
+                .unwrap_or_else(crate::auth::current_api_key)?;
             let base_url = config
                 .base_url
                 .as_deref()
                 .ok_or("base_url not configured for openai_compat")?;
-            call_openai_compat(prompt, api_key, base_url, &config.model).await
+            call_openai_compat(prompt, &api_key, base_url, &config.model).await
         }
         other => Err(format!("Unknown LLM provider: {}", other)),
     }

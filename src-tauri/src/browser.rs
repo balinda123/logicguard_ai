@@ -18,9 +18,11 @@
 
 use std::process::Command;
 use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::command;
 use tauri::Emitter;
+use tauri::Manager;
 
 // ─── 数据类型定义 ──────────────────────────────────────────────
 // 📚 这些结构体要和前端的 TypeScript 类型完全对应
@@ -81,45 +83,47 @@ struct SidecarResponse<T> {
 
 use crate::llm::LlmConfig;
 
+fn runtime_assets() -> Result<(PathBuf, PathBuf), String> {
+    let node_name = if cfg!(target_os = "windows") { "node.exe" } else { "node" };
+    let exe = std::env::current_exe().map_err(|e| format!("无法获取程序路径: {}", e))?;
+    let exe_dir = exe.parent().ok_or_else(|| "无法获取程序目录".to_string())?;
+    let mut roots = vec![
+        exe_dir.join("resources"),
+        exe_dir.to_path_buf(),
+    ];
+    if let Some(contents) = exe_dir.parent() {
+        roots.push(contents.join("Resources").join("resources"));
+    }
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources"));
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("sidecar-runtime"));
+
+    for root in roots {
+        let node = root.join("runtime").join(node_name);
+        let sidecar = root.join("sidecar").join("index.js");
+        if node.is_file() && sidecar.is_file() {
+            return Ok((node, sidecar));
+        }
+    }
+
+    // 开发模式允许使用系统 Node，但发布脚本必须准备内置 Runtime。
+    let dev_sidecar = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("sidecar").join("index.js");
+    if cfg!(debug_assertions) && dev_sidecar.is_file() {
+        return Ok((PathBuf::from(node_name), dev_sidecar));
+    }
+    Err("安装资源不完整：找不到内置 Node Runtime 或 sidecar/index.js，请重新安装应用。".to_string())
+}
+
+#[command]
+pub fn browser_check_sidecar() -> Result<bool, String> {
+    runtime_assets().map(|(node, sidecar)| node.exists() && sidecar.exists())
+}
+
 fn run_sidecar(args: Vec<String>, envs: Vec<(String, String)>) -> Result<String, String> {
-    // 找到 node.js 可执行文件
-    // 📚 在 Windows 上可能是 "node.exe"，在 Mac/Linux 上是 "node"
-    let node_cmd = if cfg!(target_os = "windows") { "node" } else { "node" };
-    
-    // sidecar 脚本路径：相对于项目根目录
-    // 📚 注意：这是开发时的路径。打包发布时需要把 Node.js 也一起打包
-    let sidecar_path = {
-        // 获取当前可执行文件的目录，往上找项目根目录
-        let exe_path = std::env::current_exe()
-            .map_err(|e| format!("无法获取程序路径: {}", e))?;
-        
-        // 开发模式：target/debug/app.exe → 项目根目录/sidecar/index.js
-        // 找到包含 src-tauri 的父目录
-        let mut path = exe_path.clone();
-        let mut found = false;
-        for _ in 0..6 {
-            path = match path.parent() {
-                Some(p) => p.to_path_buf(),
-                None => break,
-            };
-            if path.join("sidecar").join("index.js").exists() {
-                found = true;
-                break;
-            }
-        }
-        
-        if !found {
-            return Err(
-                "找不到 sidecar/index.js。\n请确保在项目根目录下有 sidecar/ 文件夹。".to_string()
-            );
-        }
-        
-        path.join("sidecar").join("index.js")
-    };
+    let (node_cmd, sidecar_path) = runtime_assets()?;
 
     // 构建并运行命令
     // 📚 std::process::Command 是 Rust 的标准库，用来启动子进程
-    let mut cmd = Command::new(node_cmd);
+    let mut cmd = Command::new(&node_cmd);
     cmd.arg(&sidecar_path)
        .args(&args);
     
@@ -161,7 +165,8 @@ fn run_sidecar(args: Vec<String>, envs: Vec<(String, String)>) -> Result<String,
 fn run_sidecar_with_config(args: Vec<String>, config: Option<LlmConfig>) -> Result<String, String> {
     let mut envs = Vec::new();
     if let Some(cfg) = config {
-        if let Some(ref key) = cfg.api_key {
+        let resolved_key = cfg.api_key.clone().or_else(|| crate::auth::current_api_key().ok());
+        if let Some(ref key) = resolved_key {
             envs.push(("LLM_API_KEY".to_string(), key.clone()));
             envs.push(("OPENAI_API_KEY".to_string(), key.clone()));
             envs.push(("ANTHROPIC_API_KEY".to_string(), key.clone()));
@@ -414,12 +419,21 @@ pub fn browser_check_connection(port: Option<u16>) -> Result<bool, String> {
 /// 查找本机 Chrome 安装路径
 /// 📚 Windows 上 Chrome 通常在以下几个位置之一
 fn find_chrome_path() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    let candidates = vec![
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".to_string(),
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge".to_string(),
+        format!("{}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", std::env::var("HOME").unwrap_or_default()),
+    ];
+
+    #[cfg(target_os = "windows")]
+    let candidates = {
     let local_app_data = format!(
         r"{}\AppData\Local\Google\Chrome\Application\chrome.exe",
         std::env::var("USERPROFILE").unwrap_or_default()
     );
 
-    let candidates = vec![
+    vec![
         // 最常见的安装路径
         r"C:\Program Files\Google\Chrome\Application\chrome.exe".to_string(),
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe".to_string(),
@@ -427,7 +441,8 @@ fn find_chrome_path() -> Option<String> {
         local_app_data,
         // 国内常见的 360 Chrome / Edge 作为备用
         r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe".to_string(),
-    ];
+    ]
+    };
 
     for path in candidates {
         if std::path::Path::new(&path).exists() {
@@ -450,7 +465,7 @@ fn find_chrome_path() -> Option<String> {
 /// 用户只需要点一次，然后在打开的 Chrome 里登录自己的 OA/SSO，
 /// 之后 LogicGuard 就可以复用这个登录状态了。
 #[command]
-pub fn launch_chrome_cdp(port: Option<u16>, user_data_dir: Option<String>) -> Result<String, String> {
+pub fn launch_chrome_cdp(app: tauri::AppHandle, port: Option<u16>, user_data_dir: Option<String>) -> Result<String, String> {
     let cdp_port = port.unwrap_or(9222);
     
     // 先检查端口是否已经有 Chrome 在跑
@@ -474,10 +489,16 @@ pub fn launch_chrome_cdp(port: Option<u16>, user_data_dir: Option<String>) -> Re
     //    - 避免和用户日常使用的 Chrome 产生锁冲突（两个 Chrome 不能共享同一个 Profile）
     //    - 保留 SSO 登录 Cookie，重启不丢失
     //    - 和普通 Chrome 互相独立，互不影响
-    let data_dir = user_data_dir.unwrap_or_else(|| {
-        let appdata = std::env::var("APPDATA").unwrap_or_else(|_| "C:\\Users\\Public".to_string());
-        format!("{}\\LogicGuardAI\\ChromeProfile", appdata)
-    });
+    let data_dir = user_data_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            app.path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("LogicGuardAI"))
+                .join("ChromeProfile")
+        });
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|e| format!("无法创建 Chrome Profile 目录: {}", e))?;
 
     // 📚 Command::new 启动子进程
     //    .spawn() 是"启动后不等待"，让 Chrome 在后台运行
@@ -485,7 +506,7 @@ pub fn launch_chrome_cdp(port: Option<u16>, user_data_dir: Option<String>) -> Re
     std::process::Command::new(&chrome_path)
         .args(&[
             &format!("--remote-debugging-port={}", cdp_port),
-            &format!("--user-data-dir={}", data_dir),
+            &format!("--user-data-dir={}", data_dir.display()),
             // 以下参数让 Chrome 更适合自动化场景
             "--no-first-run",                    // 跳过"欢迎使用"页面
             "--no-default-browser-check",        // 跳过"设为默认浏览器"弹窗
@@ -500,7 +521,7 @@ pub fn launch_chrome_cdp(port: Option<u16>, user_data_dir: Option<String>) -> Re
 
     Ok(format!(
         "Chrome 已启动！\n\n📍 CDP 端口: {}\n📂 Profile 目录: {}\n\n请在弹出的 Chrome 窗口中登录您的 OA/SSO 系统，\n登录后 LogicGuard AI 就可以复用您的登录状态了。",
-        cdp_port, data_dir
+        cdp_port, data_dir.display()
     ))
 }
 
@@ -624,32 +645,10 @@ pub fn browser_run_agent(
     config: Option<LlmConfig>,  
 ) -> Result<serde_json::Value, String> {
     let cdp_port = port.unwrap_or(9222).to_string();
-    let node_cmd = "node";
-
-    // ── 找到 sidecar/index.js 路径 ──────────────────────────────
-    let sidecar_path = {
-        let exe_path = std::env::current_exe()
-            .map_err(|e| format!("无法获取程序路径: {}", e))?;
-        let mut path = exe_path.clone();
-        let mut found = false;
-        for _ in 0..6 {
-            path = match path.parent() {
-                Some(p) => p.to_path_buf(),
-                None => break,
-            };
-            if path.join("sidecar").join("index.js").exists() {
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            return Err("找不到 sidecar/index.js".to_string());
-        }
-        path.join("sidecar").join("index.js")
-    };
+    let (node_cmd, sidecar_path) = runtime_assets()?;
 
     // ── 构建带环境变量的命令 ─────────────────────────────────────
-    let mut cmd = Command::new(node_cmd);
+    let mut cmd = Command::new(&node_cmd);
     cmd.arg(&sidecar_path)
        .arg("agent")
        .arg(format!("--port={}", cdp_port))
@@ -659,7 +658,8 @@ pub fn browser_run_agent(
 
     // 注入 LLM 配置环境变量
     if let Some(cfg) = config {
-        if let Some(ref key) = cfg.api_key {
+        let resolved_key = cfg.api_key.clone().or_else(|| crate::auth::current_api_key().ok());
+        if let Some(ref key) = resolved_key {
             cmd.env("LLM_API_KEY", key);
             cmd.env("OPENAI_API_KEY", key);
         }
@@ -687,6 +687,12 @@ pub fn browser_run_agent(
             }
             "无法获取 sidecar stdout".to_string()
         })?;
+    let stderr = child.stderr.take()
+        .ok_or_else(|| "无法获取 sidecar stderr".to_string())?;
+    let stderr_reader = std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        reader.lines().map_while(Result::ok).collect::<Vec<_>>().join("\n")
+    });
 
     let reader = BufReader::new(stdout);
     let mut all_output_lines: Vec<String> = Vec::new();
@@ -719,6 +725,7 @@ pub fn browser_run_agent(
     let exit_status = child.wait()
         .map_err(|e| format!("等待 Agent sidecar 结束失败: {}", e))?;
 
+    let stderr_output = stderr_reader.join().unwrap_or_else(|_| "stderr 读取线程异常".to_string());
     let full_output = all_output_lines.join("\n");
 
     if !exit_status.success() {
@@ -729,7 +736,8 @@ pub fn browser_run_agent(
             .last()
             .and_then(|line| serde_json::from_str::<SidecarResponse<serde_json::Value>>(line).ok())
             .and_then(|resp| resp.error)
-            .unwrap_or_else(|| format!("Agent 执行失败（退出码: {:?}）", exit_status.code()));
+            .unwrap_or_else(|| format!("Agent 执行失败（退出码: {:?}）{}", exit_status.code(),
+                if stderr_output.is_empty() { String::new() } else { format!("：{}", stderr_output) }));
         return Err(error_msg);
     }
 

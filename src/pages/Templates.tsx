@@ -22,7 +22,7 @@ import {
 import { defaultTemplates } from "../templates/defaultTemplates";
 import type { ScenarioTemplate, ParameterSet, HealerLog } from "../types";
 import { TaskExecutionConsole } from "../components/TaskExecutionConsole";
-import { getPageContent } from "../api/browserBridge";
+import { getCdpPort, getPageContent } from "../api/browserBridge";
 import {
   generateTemplateFromDocument,
   loadCustomTemplates,
@@ -31,6 +31,7 @@ import {
   updateTemplateParameterSets,
 } from "../api/templateGenerator";
 import { getLlmConfig } from "../api/llmBridge";
+import { scopedStorageKey } from "../api/auth";
 
 // 自动提取并合并步骤中的 {{变量}} 和 {变量} 占位符
 function extractVariablesFromSteps(steps: any[], existingVars: any[]): any[] {
@@ -384,7 +385,7 @@ export const Templates: React.FC = () => {
     startTime: number
   ) => {
     const duration = Math.round((Date.now() - startTime) / 1000);
-    const newId = `res_${Math.floor(100 + Math.random() * 900)}`;
+    const newId = `res_${crypto.randomUUID()}`;
     const newReport = {
       id: newId,
       testName,
@@ -404,26 +405,28 @@ export const Templates: React.FC = () => {
       try {
         const raw = await invoke<string>("load_reports_from_file");
         if (raw) existingReports = JSON.parse(raw);
-      } catch (e) {
-        const localRaw = localStorage.getItem("logicguard_test_results");
+      } catch {
+        const localRaw = localStorage.getItem(scopedStorageKey("logicguard_test_results"));
         if (localRaw) existingReports = JSON.parse(localRaw);
       }
 
       const updated = [newReport, ...existingReports];
       try {
         await invoke("save_reports_to_file", { data: JSON.stringify(updated) });
-      } catch (e) {
-        localStorage.setItem("logicguard_test_results", JSON.stringify(updated));
+      } catch {
+        localStorage.setItem(scopedStorageKey("logicguard_test_results"), JSON.stringify(updated));
       }
     } catch (err) {
       console.error("Failed to save report:", err);
       try {
         let existingReports: any[] = [];
-        const localRaw = localStorage.getItem("logicguard_test_results");
+        const localRaw = localStorage.getItem(scopedStorageKey("logicguard_test_results"));
         if (localRaw) existingReports = JSON.parse(localRaw);
         const updated = [newReport, ...existingReports];
-        localStorage.setItem("logicguard_test_results", JSON.stringify(updated));
-      } catch (innerErr) {}
+        localStorage.setItem(scopedStorageKey("logicguard_test_results"), JSON.stringify(updated));
+      } catch {
+        console.error("报告回退存储失败");
+      }
     }
   };
 
@@ -574,7 +577,7 @@ export const Templates: React.FC = () => {
 
       await invoke("browser_run_agent", {
         instruction: prompt,
-        port: 9222,
+        port: getCdpPort(),
         config,
       });
 

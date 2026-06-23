@@ -6,10 +6,11 @@ import type { PlanStep, GeneratorOutput, HealerLog } from '../types';
 // =============================================
 
 export interface LlmConfig {
-  provider: 'gemini' | 'ollama' | 'openai_compat';
+  provider: 'gemini' | 'openai_compat';
   api_key?: string;
   base_url?: string;
   model: string;
+  credential_configured?: boolean;
 }
 
 // Default to Gemini for company use
@@ -20,12 +21,17 @@ const DEFAULT_CONFIG: LlmConfig = {
 
 let _config: LlmConfig = { ...DEFAULT_CONFIG };
 
+function configStorageKey(): string {
+  return `logicguard_llm_config_${sessionStorage.getItem('logicguard_user_id') ?? 'anonymous'}`;
+}
+
 export function getLlmConfig(): LlmConfig {
   // Try to load from localStorage (persisted across sessions)
   try {
-    const stored = localStorage.getItem('logicguard_llm_config');
+    const stored = localStorage.getItem(configStorageKey());
     if (stored) {
       _config = JSON.parse(stored);
+      delete _config.api_key;
     }
   } catch {
     // ignore
@@ -34,14 +40,15 @@ export function getLlmConfig(): LlmConfig {
 }
 
 export function setLlmConfig(config: LlmConfig): void {
-  _config = config;
-  localStorage.setItem('logicguard_llm_config', JSON.stringify(config));
+  const safeConfig = { ...config };
+  delete safeConfig.api_key;
+  _config = safeConfig;
+  localStorage.setItem(configStorageKey(), JSON.stringify(safeConfig));
 }
 
 export function isConfigured(): boolean {
   const c = getLlmConfig();
-  if (c.provider === 'ollama') return true; // Ollama needs no key
-  return !!(c.api_key && c.api_key.trim().length > 10);
+  return c.credential_configured === true;
 }
 
 // =============================================
@@ -119,7 +126,7 @@ function extractJson(raw: string): any {
     // 1. Try standard replace first
     const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     return JSON.parse(cleaned);
-  } catch (e) {
+  } catch {
     // 2. Fallback: Find first { or [ and last } or ]
     const firstBrace = raw.indexOf('{');
     const lastBrace = raw.lastIndexOf('}');
@@ -142,7 +149,7 @@ function extractJson(raw: string): any {
       const jsonStr = raw.substring(startIdx, endIdx + 1);
       try {
         return JSON.parse(jsonStr);
-      } catch (innerE) {
+      } catch {
         throw new Error(`无法从 LLM 返回内容中提取有效的 JSON: ${raw}`);
       }
     }
@@ -200,4 +207,3 @@ export async function healStep(
 
   return extractJson(raw) as HealerResult;
 }
-

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Cpu, Database, Network, RefreshCw } from 'lucide-react';
+import { Cpu, Globe, Boxes, RefreshCw } from 'lucide-react';
 import type { SystemStatus } from '../types';
 
 interface HeaderProps {
@@ -47,32 +47,29 @@ export const Header: React.FC<HeaderProps> = ({ status, onRefresh, isRefreshing 
       <div className="flex items-center gap-6 shrink-0">
         {/* Status indicators */}
         <div className="flex items-center gap-4 bg-surface-0/40 px-3 py-1.5 rounded-lg border border-border shrink-0 whitespace-nowrap">
-          {/* Ollama Status */}
-          <div className="flex items-center gap-2" title={`AI 推理中心 (${status.activeModel})`}>
+          <div className="flex items-center gap-2" title={`云模型 (${status.activeModel})`}>
             <Cpu className="w-3.5 h-3.5 text-text-muted" />
-            <span className="text-[11px] text-text-secondary font-medium">Ollama:</span>
-            <span className={`status-dot ${getStatusClass(status.ollama)}`}></span>
-            <span className="text-[10px] text-text-muted">{getStatusLabel(status.ollama)}</span>
+            <span className="text-[11px] text-text-secondary font-medium">模型:</span>
+            <span className={`status-dot ${getStatusClass(status.llm)}`}></span>
+            <span className="text-[10px] text-text-muted">{getStatusLabel(status.llm)}</span>
           </div>
 
           <span className="h-3 w-px bg-border"></span>
 
-          {/* PocketBase Status */}
-          <div className="flex items-center gap-2" title="轻量数据库服务">
-            <Database className="w-3.5 h-3.5 text-text-muted" />
-            <span className="text-[11px] text-text-secondary font-medium">数据存储:</span>
-            <span className={`status-dot ${getStatusClass(status.pocketbase)}`}></span>
-            <span className="text-[10px] text-text-muted">{getStatusLabel(status.pocketbase)}</span>
+          <div className="flex items-center gap-2" title="内置 Node sidecar">
+            <Boxes className="w-3.5 h-3.5 text-text-muted" />
+            <span className="text-[11px] text-text-secondary font-medium">Sidecar:</span>
+            <span className={`status-dot ${getStatusClass(status.sidecar)}`}></span>
+            <span className="text-[10px] text-text-muted">{getStatusLabel(status.sidecar)}</span>
           </div>
 
           <span className="h-3 w-px bg-border"></span>
 
-          {/* Tailscale Status */}
-          <div className="flex items-center gap-2" title="内网穿透安全通道">
-            <Network className="w-3.5 h-3.5 text-text-muted" />
-            <span className="text-[11px] text-text-secondary font-medium">穿透网关:</span>
-            <span className={`status-dot ${getStatusClass(status.tailscale)}`}></span>
-            <span className="text-[10px] text-text-muted">{getStatusLabel(status.tailscale)}</span>
+          <div className="flex items-center gap-2" title="Chrome CDP 连接">
+            <Globe className="w-3.5 h-3.5 text-text-muted" />
+            <span className="text-[11px] text-text-secondary font-medium">浏览器:</span>
+            <span className={`status-dot ${getStatusClass(status.browser)}`}></span>
+            <span className="text-[10px] text-text-muted">{getStatusLabel(status.browser)}</span>
           </div>
         </div>
 

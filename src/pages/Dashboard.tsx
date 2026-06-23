@@ -16,13 +16,14 @@ import type {
 } from "../types";
 import { defaultTemplates } from "../templates/defaultTemplates";
 import { planTask, isConfigured, getLlmConfig } from "../api/llmBridge";
-import { getPageSnapshot } from "../api/browserBridge";
+import { getCdpPort, getPageSnapshot } from "../api/browserBridge";
 import { executeTaskLoop } from "../agents/executorEngine";
 import { generateTestScript } from "../agents/scriptGenerator";
 import { executeTestScript } from "../agents/scriptExecutor";
 import type { StagehandStep } from "../agents/stagehandExecutor";
 import { TaskExecutionConsole } from "../components/TaskExecutionConsole";
 import type { ConsoleStep } from "../components/TaskExecutionConsole";
+import { scopedStorageKey } from "../api/auth";
 
 export const Dashboard: React.FC = () => {
   const [taskInput, setTaskInput] = useState("");
@@ -183,7 +184,7 @@ export const Dashboard: React.FC = () => {
     startTime: number,
   ) => {
     const duration = Math.round((Date.now() - startTime) / 1000);
-    const newId = `res_${Math.floor(100 + Math.random() * 900)}`;
+    const newId = `res_${crypto.randomUUID()}`;
     const newReport = {
       id: newId,
       testName,
@@ -206,17 +207,17 @@ export const Dashboard: React.FC = () => {
       try {
         const raw = await invoke<string>("load_reports_from_file");
         if (raw) existingReports = JSON.parse(raw);
-      } catch (e) {
-        const localRaw = localStorage.getItem("logicguard_test_results");
+      } catch {
+        const localRaw = localStorage.getItem(scopedStorageKey("logicguard_test_results"));
         if (localRaw) existingReports = JSON.parse(localRaw);
       }
 
       const updated = [newReport, ...existingReports];
       try {
         await invoke("save_reports_to_file", { data: JSON.stringify(updated) });
-      } catch (e) {
+      } catch {
         localStorage.setItem(
-          "logicguard_test_results",
+          scopedStorageKey("logicguard_test_results"),
           JSON.stringify(updated),
         );
       }
@@ -224,14 +225,16 @@ export const Dashboard: React.FC = () => {
       console.error("Failed to save report:", err);
       try {
         let existingReports: any[] = [];
-        const localRaw = localStorage.getItem("logicguard_test_results");
+        const localRaw = localStorage.getItem(scopedStorageKey("logicguard_test_results"));
         if (localRaw) existingReports = JSON.parse(localRaw);
         const updated = [newReport, ...existingReports];
         localStorage.setItem(
-          "logicguard_test_results",
+          scopedStorageKey("logicguard_test_results"),
           JSON.stringify(updated),
         );
-      } catch (innerErr) {}
+      } catch {
+        console.error("报告回退存储失败");
+      }
     }
   };
 
@@ -338,12 +341,8 @@ export const Dashboard: React.FC = () => {
         });
         plannedSteps = result.steps;
       } else {
-        // ── Fallback: simulated engine (no API key configured) ──
         setUsingRealLlm(false);
-        const { simulatePlanning } = await import("../agents/simulatedEngine");
-        plannedSteps = await simulatePlanning(taskInput, (status) => {
-          setPlanningStatus(status);
-        });
+        throw new Error("尚未配置当前用户的模型 API Key，请先前往系统设置完成配置和连接测试。");
       }
 
       setSteps(plannedSteps);
@@ -367,21 +366,7 @@ export const Dashboard: React.FC = () => {
           checkPause
         );
       } else {
-        const { runStepSimulation } = await import("../agents/simulatedEngine");
-        for (const step of plannedSteps) {
-          await checkPause();
-          await runStepSimulation(
-            step,
-            (updatedStep) =>
-              setSteps((prev) =>
-                prev.map((s) =>
-                  s.stepId === updatedStep.stepId ? updatedStep : s,
-                ),
-              ),
-            (log) => setHealerLogs((prev) => [...prev, log]),
-            (page) => setCurrentPage(page),
-          );
-        }
+        throw new Error("模型配置不可用，任务未执行。");
       }
     } catch (e) {
       console.error(e);
@@ -469,7 +454,7 @@ export const Dashboard: React.FC = () => {
 
       await invoke("browser_run_agent", {
         instruction: taskInput,
-        port: 9222,
+        port: getCdpPort(),
         config,
       });
 

@@ -56,7 +56,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, statu
         <div className="p-3 rounded-lg bg-surface-2/60 border border-border space-y-2">
           <div className="flex items-center justify-between text-[11px]">
             <span className="text-text-muted flex items-center gap-1.5">
-              <Cpu className="w-3.5 h-3.5" /> 本地模型:
+              <Cpu className="w-3.5 h-3.5" /> 当前模型:
             </span>
             <span className="font-mono text-brand-400 font-medium max-w-[100px] truncate" title={status.activeModel}>
               {status.activeModel}

@@ -1,30 +1,33 @@
 import React, { useState, useEffect } from 'react';
-import { Cpu, Database, Sliders, Shield, RefreshCw, CheckCircle, XCircle, Key, Zap, Globe } from 'lucide-react';
+import { Cpu, Sliders, Shield, RefreshCw, CheckCircle, XCircle, Key, Zap, Globe } from 'lucide-react';
 import type { SystemStatus } from '../types';
 import { getLlmConfig, setLlmConfig, testLlmConnection } from '../api/llmBridge';
 import type { LlmConfig } from '../api/llmBridge';
 import { invoke } from '@tauri-apps/api/core';
+import { createUser, disableUser, getCredentialStatus, listUsers, resetUserPassword, saveApiKey, type SessionUser } from '../api/auth';
+import { getCdpPort, setCdpPort as saveCdpPort } from '../api/browserBridge';
 
 interface SettingsProps {
   status: SystemStatus;
   setStatus: React.Dispatch<React.SetStateAction<SystemStatus>>;
+  currentUser: SessionUser;
 }
 
 type TestState = 'idle' | 'testing' | 'ok' | 'error';
 
-export const Settings: React.FC<SettingsProps> = ({ status, setStatus }) => {
+export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUser }) => {
   const [llmConfig, setLlmConfigState] = useState<LlmConfig>(getLlmConfig());
   const [showApiKey, setShowApiKey] = useState(false);
   const [llmTestState, setLlmTestState] = useState<TestState>('idle');
   const [llmTestMsg, setLlmTestMsg] = useState('');
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [users, setUsers] = useState<SessionUser[]>([]);
+  const [newUsername, setNewUsername] = useState('');
+  const [newPassword, setNewPassword] = useState('');
 
-  const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
-  const [dbUrl, setDbUrl] = useState('http://localhost:8090');
-  const [cdpPort, setCdpPort] = useState('9222');
+  const [cdpPort, setCdpPort] = useState(String(getCdpPort()));
   const [chromeProfile, setChromeProfile] = useState(status.activeProfile);
   const [isolatedMode, setIsolatedMode] = useState(true);
-  const [isTestingDb, setIsTestingDb] = useState(false);
-  const [dbTestState, setDbTestState] = useState<TestState>('idle');
 
   // Chrome CDP 一键启动状态
   const [chromeLaunchState, setChromeLaunchState] = useState<TestState>('idle');
@@ -33,11 +36,13 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus }) => {
   // 检查 CDP 连接状态
   const checkCdpConnection = async () => {
     try {
-      const connected = await invoke<boolean>('browser_check_connection', { port: parseInt(cdpPort) });
-      if (connected) setStatus(prev => ({ ...prev, tailscale: 'connected' }));
-      else setStatus(prev => ({ ...prev, tailscale: 'disconnected' }));
+      const port = parseInt(cdpPort, 10);
+      saveCdpPort(port);
+      const connected = await invoke<boolean>('browser_check_connection', { port });
+      if (connected) setStatus(prev => ({ ...prev, browser: 'connected' }));
+      else setStatus(prev => ({ ...prev, browser: 'disconnected' }));
     } catch {
-      setStatus(prev => ({ ...prev, tailscale: 'disconnected' }));
+      setStatus(prev => ({ ...prev, browser: 'disconnected' }));
     }
   };
 
@@ -46,8 +51,10 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus }) => {
     setChromeLaunchState('testing');
     setChromeLaunchMsg('');
     try {
+      const port = parseInt(cdpPort, 10);
+      saveCdpPort(port);
       const msg = await invoke<string>('launch_chrome_cdp', {
-        port: parseInt(cdpPort),
+        port,
         userDataDir: null,
       });
       setChromeLaunchState('ok');
@@ -61,51 +68,48 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus }) => {
   };
 
 
-  // Sync ollama URL into llmConfig when provider is ollama
   useEffect(() => {
-    if (llmConfig.provider === 'ollama') {
-      setLlmConfigState(prev => ({ ...prev, base_url: ollamaUrl }));
-    }
-  }, [ollamaUrl, llmConfig.provider]);
+    getCredentialStatus().then((configured) => {
+      setLlmConfigState((prev) => ({ ...prev, credential_configured: configured }));
+    });
+    if (currentUser.role === 'admin') listUsers().then(setUsers).catch(() => setUsers([]));
+  }, [currentUser.role]);
 
-  const handleSaveLlmConfig = () => {
-    const cfg = llmConfig.provider === 'ollama'
-      ? { ...llmConfig, base_url: ollamaUrl }
-      : llmConfig;
+  const handleSaveLlmConfig = async () => {
+    let credentialConfigured = llmConfig.credential_configured === true;
+    if (apiKeyInput.trim()) {
+      await saveApiKey(apiKeyInput);
+      credentialConfigured = true;
+      setApiKeyInput('');
+    }
+    if (!credentialConfigured) {
+      throw new Error('请先填写当前用户的 API Key');
+    }
+    const cfg = { ...llmConfig, credential_configured: credentialConfigured };
     setLlmConfig(cfg);
+    setLlmConfigState(cfg);
+    return cfg;
   };
 
   const handleTestLlm = async () => {
     setLlmTestState('testing');
     setLlmTestMsg('');
-    handleSaveLlmConfig();
-    const result = await testLlmConnection(llmConfig);
+    let cfg: LlmConfig;
+    try {
+      cfg = await handleSaveLlmConfig();
+    } catch (reason) {
+      setLlmTestState('error');
+      setLlmTestMsg(String(reason));
+      return;
+    }
+    const result = await testLlmConnection(cfg);
     setLlmTestState(result.ok ? 'ok' : 'error');
     setLlmTestMsg(result.message);
     if (result.ok) {
-      setStatus(prev => ({ ...prev, ollama: 'connected' }));
+      setStatus(prev => ({ ...prev, llm: 'connected' }));
     } else {
-      setStatus(prev => ({ ...prev, ollama: 'disconnected' }));
+      setStatus(prev => ({ ...prev, llm: 'disconnected' }));
     }
-  };
-
-  const handleTestDb = async () => {
-    setIsTestingDb(true);
-    setDbTestState('testing');
-    try {
-      const resp = await fetch(`${dbUrl}/api/health`);
-      if (resp.ok) {
-        setDbTestState('ok');
-        setStatus(prev => ({ ...prev, pocketbase: 'connected' }));
-      } else {
-        setDbTestState('error');
-        setStatus(prev => ({ ...prev, pocketbase: 'disconnected' }));
-      }
-    } catch {
-      setDbTestState('error');
-      setStatus(prev => ({ ...prev, pocketbase: 'disconnected' }));
-    }
-    setIsTestingDb(false);
   };
 
   const inputCls = 'w-full h-9 px-3 rounded-lg bg-surface-2 border border-border focus:border-brand-500 text-xs text-text-primary font-mono outline-none transition-all duration-200';
@@ -116,7 +120,7 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus }) => {
       {/* Header */}
       <div>
         <h2 className="text-lg font-bold text-text-primary">系统配置面板</h2>
-        <p className="text-xs text-text-muted">管理 AI 模型接入、浏览器 CDP 控制、PocketBase 数据存储等核心配置</p>
+        <p className="text-xs text-text-muted">管理云端 AI 模型、浏览器 CDP 和本地用户配置</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -150,13 +154,11 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus }) => {
                   ...prev,
                   provider: e.target.value as LlmConfig['provider'],
                   model: e.target.value === 'gemini' ? 'gemini-2.0-flash'
-                    : e.target.value === 'ollama' ? 'qwen2.5:7b'
                     : 'deepseek-chat'
                 }))}
                 className={inputCls}
               >
                 <option value="gemini">Google Gemini API（公司推荐）</option>
-                <option value="ollama">本地 Ollama（家里/离线）</option>
                 <option value="openai_compat">OpenAI 兼容接口（DeepSeek/Qwen 等）</option>
               </select>
             </div>
@@ -164,29 +166,15 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus }) => {
             {/* Model name */}
             <div className="space-y-1">
               <label className={labelCls}>模型名称</label>
-              {llmConfig.provider === 'ollama' ? (
-                <select
-                  value={llmConfig.model}
-                  onChange={(e) => setLlmConfigState(prev => ({ ...prev, model: e.target.value }))}
-                  className={inputCls}
-                >
-                  <option value="qwen2.5:7b">qwen2.5:7b（推荐）</option>
-                  <option value="deepseek-r1:7b">deepseek-r1:7b</option>
-                  <option value="llama3.1:8b">llama3.1:8b</option>
-                </select>
-              ) : (
-                <input
+              <input
                   type="text"
                   value={llmConfig.model}
                   onChange={(e) => setLlmConfigState(prev => ({ ...prev, model: e.target.value }))}
                   placeholder={llmConfig.provider === 'gemini' ? 'gemini-2.0-flash' : 'deepseek-chat'}
                   className={inputCls}
                 />
-              )}
             </div>
 
-            {/* API Key (not needed for Ollama) */}
-            {llmConfig.provider !== 'ollama' && (
               <div className="space-y-1 sm:col-span-2">
                 <label className={labelCls}>
                   <Key className="w-3 h-3 inline mr-1" />
@@ -195,9 +183,9 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus }) => {
                 <div className="flex gap-2">
                   <input
                     type={showApiKey ? 'text' : 'password'}
-                    value={llmConfig.api_key ?? ''}
-                    onChange={(e) => setLlmConfigState(prev => ({ ...prev, api_key: e.target.value }))}
-                    placeholder={llmConfig.provider === 'gemini' ? 'AIza...' : 'sk-...'}
+                    value={apiKeyInput}
+                    onChange={(e) => setApiKeyInput(e.target.value)}
+                    placeholder={llmConfig.credential_configured ? '已安全保存；留空表示不修改' : llmConfig.provider === 'gemini' ? 'AIza...' : 'sk-...'}
                     className={`${inputCls} flex-1`}
                   />
                   <button
@@ -208,23 +196,9 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus }) => {
                   </button>
                 </div>
                 <p className="text-[9px] text-text-muted mt-1">
-                  密钥仅存储在本地 localStorage，不会上传到任何服务器
+                  密钥保存在当前系统用户的安全凭据库中，不写入配置文件
                 </p>
               </div>
-            )}
-
-            {/* Ollama URL */}
-            {llmConfig.provider === 'ollama' && (
-              <div className="space-y-1">
-                <label className={labelCls}>Ollama 服务地址</label>
-                <input
-                  type="text"
-                  value={ollamaUrl}
-                  onChange={(e) => setOllamaUrl(e.target.value)}
-                  className={inputCls}
-                />
-              </div>
-            )}
 
             {/* OpenAI-compat base URL */}
             {llmConfig.provider === 'openai_compat' && (
@@ -331,40 +305,39 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus }) => {
           </div>
         </div>
 
-        {/* ─── Section 3: PocketBase ─── */}
-        <div className="p-5 rounded-xl border border-border bg-surface-1/70 space-y-4 glow">
-          <div className="flex items-center justify-between pb-3 border-b border-border">
-            <div className="flex items-center gap-2.5">
-              <Database className="w-4 h-4 text-brand-400" />
-              <h3 className="text-xs font-bold text-text-primary">PocketBase 数据存储</h3>
+        {currentUser.role === 'admin' && (
+          <div className="p-5 rounded-xl border border-border bg-surface-1/70 space-y-4 glow col-span-full">
+            <div className="flex items-center gap-2.5 pb-3 border-b border-border">
+              <Shield className="w-4 h-4 text-brand-400" />
+              <h3 className="text-xs font-bold text-text-primary">本地用户管理</h3>
             </div>
-            {dbTestState === 'ok' && <span className="flex items-center gap-1 text-[10px] text-success"><CheckCircle className="w-3 h-3" /> 已连接</span>}
-            {dbTestState === 'error' && <span className="flex items-center gap-1 text-[10px] text-error"><XCircle className="w-3 h-3" /> 未连接</span>}
-          </div>
-
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <label className={labelCls}>数据库端点</label>
-              <input
-                type="text"
-                value={dbUrl}
-                onChange={(e) => setDbUrl(e.target.value)}
-                className={inputCls}
-              />
-              <p className="text-[9px] text-text-muted mt-1">
-                家里 PC 已配置。公司环境若未开机，任务报告将暂存本地。
-              </p>
+            <div className="flex flex-wrap gap-2">
+              <input className={`${inputCls} flex-1 min-w-40`} placeholder="新用户名" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} />
+              <input className={`${inputCls} flex-1 min-w-40`} type="password" placeholder="初始密码（至少 8 位）" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+              <button className="h-9 px-4 rounded-lg bg-brand-500 text-white text-xs font-semibold" onClick={async () => {
+                try {
+                  await createUser(newUsername, newPassword);
+                  setUsers(await listUsers());
+                  setNewUsername(''); setNewPassword('');
+                } catch (reason) { window.alert(String(reason)); }
+              }}>创建用户</button>
             </div>
-            <button
-              onClick={handleTestDb}
-              disabled={isTestingDb}
-              className="h-8 px-4 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border hover:border-border-hover text-text-primary text-xs font-semibold flex items-center gap-1.5 transition-all duration-200 disabled:opacity-40"
-            >
-              {isTestingDb ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-              测试 PocketBase 连通性
-            </button>
+            <div className="space-y-2">
+              {users.map((user) => <div key={user.id} className="flex items-center justify-between rounded-lg border border-border bg-surface-2 px-3 py-2">
+                <span className="text-xs text-text-primary">{user.username} <span className="text-text-muted">({user.role})</span></span>
+                {user.id !== currentUser.id && <div className="flex gap-2">
+                  <button className="text-[10px] text-brand-400" onClick={async () => {
+                    const password = window.prompt(`为 ${user.username} 设置新密码（至少 8 位）`);
+                    if (password) await resetUserPassword(user.id, password).catch((reason) => window.alert(String(reason)));
+                  }}>重置密码</button>
+                  <button className="text-[10px] text-error" onClick={async () => {
+                    if (window.confirm(`确认禁用 ${user.username}？`)) { await disableUser(user.id); setUsers(await listUsers()); }
+                  }}>禁用</button>
+                </div>}
+              </div>)}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* ─── Section 4: Cloud fallback note ─── */}
         <div className="p-5 rounded-xl border border-border bg-surface-1/70 space-y-3 glow col-span-full">
@@ -374,12 +347,12 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus }) => {
           </div>
           <div className="p-3 rounded-lg bg-info/10 border border-info/20">
             <p className="text-[10px] text-info leading-relaxed">
-              💡 当前策略：<strong>Gemini API (云端)</strong> 为主推理引擎。回到家后切换"模型提供商"为 Ollama 即可无缝改为本地推理，所有 Prompt 模板完全兼容，无需修改任何代码。
+              💡 当前版本使用用户自行配置的云端模型，不依赖 PocketBase、Tailscale 或本地模型服务。
             </p>
           </div>
           <div className="p-3 rounded-lg bg-warning/5 border border-warning/15">
             <p className="text-[10px] text-warning leading-relaxed">
-              ⚠️ API 密钥安全：密钥存储在浏览器 localStorage 中，通过 Tauri Rust 后端中转请求，前端代码中不直接暴露密钥给任何第三方脚本。
+              ⚠️ API 密钥安全：密钥保存在 Windows Credential Manager 或 macOS Keychain，并按当前登录用户隔离。
             </p>
           </div>
         </div>

@@ -1,6 +1,7 @@
 mod llm;
 mod browser;
 mod reports;
+mod auth;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,6 +22,16 @@ pub fn run() {
       // 本地报告文件持久化命令
       reports::save_reports_to_file,
       reports::load_reports_from_file,
+      auth::auth_status,
+      auth::initialize_admin,
+      auth::login,
+      auth::logout,
+      auth::list_users,
+      auth::create_user,
+      auth::disable_user,
+      auth::reset_user_password,
+      auth::save_api_key,
+      auth::credential_status,
       // LLM 大模型相关命令
       llm::test_llm_connection,
       llm::plan_task,
@@ -36,6 +47,7 @@ pub fn run() {
       browser::browser_navigate,
       browser::browser_assert,
       browser::browser_check_connection,
+      browser::browser_check_sidecar,
       browser::launch_chrome_cdp,
       browser::get_chrome_path,
       browser::browser_get_page_content,

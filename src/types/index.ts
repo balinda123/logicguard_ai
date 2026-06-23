@@ -130,9 +130,9 @@ export interface TestResult {
 }
 
 export interface SystemStatus {
-  ollama: 'connected' | 'disconnected' | 'checking';
-  pocketbase: 'connected' | 'disconnected' | 'checking';
-  tailscale: 'connected' | 'disconnected' | 'checking';
+  llm: 'connected' | 'disconnected' | 'checking';
+  browser: 'connected' | 'disconnected' | 'checking';
+  sidecar: 'connected' | 'disconnected' | 'checking';
   activeProfile: string;
   activeModel: string;
 }

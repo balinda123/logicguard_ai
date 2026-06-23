@@ -14,6 +14,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { TestResult } from "../types";
+import { scopedStorageKey } from "../api/auth";
 
 export const Reports: React.FC = () => {
   const [results, setResults] = useState<TestResult[]>([]);
@@ -32,7 +33,7 @@ export const Reports: React.FC = () => {
           rawList = await invoke<string>("load_reports_from_file");
         } catch (err) {
           console.warn("load_reports_from_file failed, falling back to localStorage", err);
-          rawList = localStorage.getItem("logicguard_test_results") || "[]";
+          rawList = localStorage.getItem(scopedStorageKey("logicguard_test_results")) || "[]";
         }
 
         const parsed = JSON.parse(rawList);
@@ -43,8 +44,8 @@ export const Reports: React.FC = () => {
         
         try {
           await invoke("save_reports_to_file", { data: JSON.stringify(realRuns) });
-        } catch (err) {
-          localStorage.setItem("logicguard_test_results", JSON.stringify(realRuns));
+        } catch {
+          localStorage.setItem(scopedStorageKey("logicguard_test_results"), JSON.stringify(realRuns));
         }
       } catch (e) {
         console.warn("Failed to load reports", e);
@@ -94,7 +95,7 @@ export const Reports: React.FC = () => {
 
   // Helper to trigger a fresh report (simulate adding one for developer quick verification)
   const handleSimulateNewReport = async () => {
-    const newId = `res_${Math.floor(100 + Math.random() * 900)}`;
+    const newId = `res_${crypto.randomUUID()}`;
     const randomStatus =
       Math.random() > 0.35 ? ("success" as const) : ("failed" as const);
     const isHealed = randomStatus === "success" && Math.random() > 0.5;
@@ -125,7 +126,7 @@ export const Reports: React.FC = () => {
       await invoke("save_reports_to_file", { data: JSON.stringify(updated) });
     } catch (err) {
       console.warn("save_reports_to_file failed, falling back to localStorage", err);
-      localStorage.setItem("logicguard_test_results", JSON.stringify(updated));
+      localStorage.setItem(scopedStorageKey("logicguard_test_results"), JSON.stringify(updated));
     }
   };
 
@@ -139,7 +140,7 @@ export const Reports: React.FC = () => {
         await invoke("save_reports_to_file", { data: "[]" });
       } catch (err) {
         console.warn("save_reports_to_file failed, falling back to localStorage", err);
-        localStorage.removeItem("logicguard_test_results");
+        localStorage.removeItem(scopedStorageKey("logicguard_test_results"));
       }
     }
   };

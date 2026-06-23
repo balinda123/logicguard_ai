@@ -1,14 +1,21 @@
 {
   "name": "logic_guard_ai",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0 <23"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "prepare:sidecar": "node scripts/prepare-sidecar.mjs",
+    "bundle:windows": "npm run prepare:sidecar && tauri build --bundles nsis",
+    "bundle:macos": "npm run prepare:sidecar && tauri build --bundles app,dmg --target aarch64-apple-darwin",
+    "check": "npm run lint && npm run build"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.0",

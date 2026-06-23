@@ -5,41 +5,46 @@ import { Templates } from './pages/Templates';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import type { SystemStatus } from './types';
-import { getLlmConfig } from './api/llmBridge';
+import { getLlmConfig, isConfigured, testLlmConnection } from './api/llmBridge';
+import { checkBrowserConnection } from './api/browserBridge';
+import { invoke } from '@tauri-apps/api/core';
 import './App.css';
+import { AuthGate } from './components/AuthGate';
+import type { SessionUser } from './api/auth';
 
-function App() {
+function AuthenticatedApp({ user }: { user: SessionUser }) {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Connection states
   const [status, setStatus] = useState<SystemStatus>({
-    ollama: 'connected',
-    pocketbase: 'connected',
-    tailscale: 'connected',
+    llm: 'disconnected',
+    browser: 'disconnected',
+    sidecar: 'checking',
     activeProfile: 'Default (Admin)',
     activeModel: getLlmConfig().model || 'qwen2.5:7b'
   });
 
   const handleRefreshStatus = async () => {
     setIsRefreshing(true);
-    // Simulate checking connection statuses
     setStatus(prev => ({
       ...prev,
-      ollama: 'checking',
-      pocketbase: 'checking',
-      tailscale: 'checking'
+      llm: 'checking',
+      browser: 'checking',
+      sidecar: 'checking'
     }));
-
-    await new Promise((r) => setTimeout(r, 1500));
-
-    setStatus({
-      ollama: 'connected',
-      pocketbase: 'connected',
-      tailscale: 'connected',
-      activeProfile: 'Default (Admin)',
-      activeModel: getLlmConfig().model || 'qwen2.5:7b'
-    });
+    const [browser, sidecar, llm] = await Promise.all([
+      checkBrowserConnection(),
+      invoke<boolean>('browser_check_sidecar').catch(() => false),
+      isConfigured() ? testLlmConnection().then((result) => result.ok) : Promise.resolve(false),
+    ]);
+    setStatus((prev) => ({
+      ...prev,
+      llm: llm ? 'connected' : 'disconnected',
+      browser: browser ? 'connected' : 'disconnected',
+      sidecar: sidecar ? 'connected' : 'disconnected',
+      activeModel: getLlmConfig().model,
+    }));
     setIsRefreshing(false);
   };
 
@@ -52,7 +57,7 @@ function App() {
       case 'reports':
         return <Reports />;
       case 'settings':
-        return <Settings status={status} setStatus={setStatus} />;
+        return <Settings status={status} setStatus={setStatus} currentUser={user} />;
       default:
         return <Dashboard />;
     }
@@ -69,6 +74,10 @@ function App() {
       {renderActivePage()}
     </Layout>
   );
+}
+
+function App() {
+  return <AuthGate>{(user) => <AuthenticatedApp user={user} />}</AuthGate>;
 }
 
 export default App;

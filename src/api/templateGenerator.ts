@@ -201,11 +201,13 @@ export async function generateTemplateFromDocument(
 
 // ─── 本地模板存储（localStorage）────────────────────────────────────────────
 
-const STORAGE_KEY = 'logicguard_custom_templates';
+function storageKey(): string {
+  return `logicguard_custom_templates_${sessionStorage.getItem('logicguard_user_id') ?? 'anonymous'}`;
+}
 
 export function loadCustomTemplates(): ScenarioTemplate[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey());
     if (!raw) return [];
     return JSON.parse(raw) as ScenarioTemplate[];
   } catch {
@@ -222,7 +224,7 @@ export function saveCustomTemplate(template: ScenarioTemplate): ScenarioTemplate
   } else {
     existing.unshift(template); // 新模板放在最前面
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
+  localStorage.setItem(storageKey(), JSON.stringify(existing));
   return existing;
 }
 
@@ -232,12 +234,12 @@ export function updateTemplateParameterSets(
 ): ScenarioTemplate[] {
   const all = loadCustomTemplates();
   const updated = updater(all);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  localStorage.setItem(storageKey(), JSON.stringify(updated));
   return updated;
 }
 
 export function deleteCustomTemplate(templateId: string): ScenarioTemplate[] {
   const existing = loadCustomTemplates().filter(t => t.id !== templateId);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
+  localStorage.setItem(storageKey(), JSON.stringify(existing));
   return existing;
 }

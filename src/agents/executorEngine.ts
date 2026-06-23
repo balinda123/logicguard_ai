@@ -30,7 +30,7 @@ export async function executeTaskLoop(
     const currentStep = { ...step, status: 'running' as PlanStep['status'] };
     onStepUpdate(currentStep);
 
-    let maxRetries = 3;
+    const maxRetries = 3;
     let attempt = 0;
     let stepSuccess = false;
     let lastFailureReason = '';

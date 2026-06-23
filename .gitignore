@@ -11,6 +11,12 @@ node_modules
 dist
 dist-ssr
 *.local
+.npm-cache
+.runtime-cache
+src-tauri/resources/runtime/*
+src-tauri/resources/sidecar/*
+!src-tauri/resources/runtime/.gitkeep
+!src-tauri/resources/sidecar/.gitkeep
 
 # Editor directories and files
 .vscode/*
