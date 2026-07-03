@@ -1,4 +1,4 @@
-# LogicGuard AI 安装包构建
+# 测试小助手安装包构建
 
 ## 通用要求
 
@@ -22,7 +22,7 @@ npm run bundle:windows
 安装程序输出到：
 
 ```text
-src-tauri/target/release/bundle/nsis/LogicGuard AI_0.1.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/测试小助手_0.1.0_x64-setup.exe
 ```
 
 ## macOS Apple Silicon

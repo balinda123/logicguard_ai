@@ -45,7 +45,7 @@ export function AuthGate({ children }: AuthGateProps) {
     return <>
       {children(user)}
       <button
-        className="fixed right-6 bottom-5 z-50 rounded-lg border border-border bg-surface-2 px-3 py-2 text-[11px] text-text-secondary shadow-md hover:text-text-primary"
+        className="fixed left-10 bottom-8 z-50 w-40 rounded-xl border border-border bg-surface-2/90 px-3 py-2.5 text-[11px] text-text-secondary shadow-md backdrop-blur hover:border-error/30 hover:bg-error/10 hover:text-error transition-all flex items-center justify-center gap-1.5"
         onClick={async () => { await logout(); setActiveUser(null); setUser(null); }}
       >退出 {user.username}</button>
     </>;
@@ -58,7 +58,7 @@ export function AuthGate({ children }: AuthGateProps) {
           <ShieldCheck className="h-5 w-5 text-white" />
         </div>
         <div>
-          <h1 className="text-base font-bold text-text-primary">LogicGuard AI</h1>
+          <h1 className="text-base font-bold text-text-primary">测试小助手</h1>
           <p className="text-[11px] text-text-muted">{initialized === false ? '首次启动：创建管理员' : '登录本地工作区'}</p>
         </div>
       </div>

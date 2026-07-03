@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LogicGuard AI",
+  "productName": "测试小助手",
   "version": "0.1.0",
   "identifier": "ai.logicguard.desktop",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "LogicGuard AI",
+        "title": "测试小助手",
         "width": 800,
         "height": 600,
         "resizable": true,

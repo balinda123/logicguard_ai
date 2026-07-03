@@ -127,6 +127,13 @@ export interface TestResult {
   reportMarkdown?: string;
   screenshot?: string;
   duration?: number;
+  suiteId?: string;
+  suiteName?: string;
+  caseId?: string;
+  caseName?: string;
+  managementSummary?: string;
+  riskLevel?: 'low' | 'medium' | 'high';
+  releaseAdvice?: 'can_release' | 'review_required' | 'block_release';
 }
 
 export interface SystemStatus {
@@ -135,4 +142,63 @@ export interface SystemStatus {
   sidecar: 'connected' | 'disconnected' | 'checking';
   activeProfile: string;
   activeModel: string;
+}
+
+export type DataSecurityMode = 'strict_redaction' | 'local_model_first' | 'cloud_enhanced';
+
+export interface DataSecurityConfig {
+  mode: DataSecurityMode;
+  allowRawScreenshots: boolean;
+}
+
+export type TestCaseType =
+  | 'normal'
+  | 'boundary'
+  | 'empty'
+  | 'permission'
+  | 'repeat'
+  | 'combination';
+
+export type TestCaseStatus = 'draft' | 'confirmed' | 'archived';
+
+export interface TestCaseStep {
+  order: number;
+  action: string;
+  expectedResult: string;
+}
+
+export interface TestCase {
+  id: string;
+  title: string;
+  requirementTitle: string;
+  module: string;
+  templateId?: string;
+  templateName?: string;
+  sourceKind?: 'requirement' | 'template' | 'manual';
+  type: TestCaseType;
+  priority: 'P0' | 'P1' | 'P2' | 'P3';
+  riskPoint: string;
+  preconditions: string[];
+  testData: Record<string, string>;
+  steps: TestCaseStep[];
+  expectedResult: string;
+  isBoundary: boolean;
+  isRepeat: boolean;
+  status: TestCaseStatus;
+  createdAt: string;
+  confirmedAt?: string;
+  suiteIds: string[];
+  lastRunStatus?: 'success' | 'failed' | 'pending';
+  lastRunAt?: string;
+}
+
+export interface RegressionSuite {
+  id: string;
+  name: string;
+  description: string;
+  module: string;
+  caseIds: string[];
+  createdAt: string;
+  lastRunAt?: string;
+  lastPassRate?: number;
 }

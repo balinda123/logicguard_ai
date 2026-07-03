@@ -32,6 +32,7 @@ import {
 } from "../api/templateGenerator";
 import { getLlmConfig } from "../api/llmBridge";
 import { scopedStorageKey } from "../api/auth";
+import { maskSensitiveText, sanitizeForLlm } from "../utils/privacy";
 
 // 自动提取并合并步骤中的 {{变量}} 和 {变量} 占位符
 function extractVariablesFromSteps(steps: any[], existingVars: any[]): any[] {
@@ -83,9 +84,13 @@ function extractVariablesFromSteps(steps: any[], existingVars: any[]): any[] {
   return updatedVars;
 }
 
-export const Templates: React.FC = () => {
+interface TemplatesProps {
+  initialView?: "list" | "generate" | "configure";
+}
+
+export const Templates: React.FC<TemplatesProps> = ({ initialView = "list" }) => {
   // ─── 页面视图控制 ────────────────────────────────────────────────────────
-  const [currentView, setCurrentView] = useState<"list" | "generate" | "configure">("list");
+  const [currentView, setCurrentView] = useState<"list" | "generate" | "configure">(initialView);
 
   // ─── 状态管理 ──────────────────────────────────────────────────────────
   const [customTemplates, setCustomTemplates] = useState<ScenarioTemplate[]>(
@@ -576,7 +581,7 @@ export const Templates: React.FC = () => {
       setRunningProgressMsg("🤖 Agent 已启动，正在操控 Chrome 执行操作...");
 
       await invoke("browser_run_agent", {
-        instruction: prompt,
+        instruction: sanitizeForLlm(prompt),
         port: getCdpPort(),
         config,
       });
@@ -605,8 +610,8 @@ export const Templates: React.FC = () => {
       // 生成并保存测试报告
       const successCount = localSteps.filter((s) => s.status === "success").length;
       let md = `### ${success ? "🏆" : "🔴"} Stagehand 智能 Agent 测试报告\n\n`;
-      md += `- **模板名称**: ${selectedTemplate.name}\n`;
-      md += `- **测试参数集**: ${name}\n`;
+      md += `- **模板名称**: ${maskSensitiveText(selectedTemplate.name)}\n`;
+      md += `- **测试参数集**: ${maskSensitiveText(name)}\n`;
       md += `- **测试状态**: ${success ? "✅ 成功" : "❌ 失败"}\n`;
       md += `- **运行模式**: Stagehand 闭环自主 Agent + 步骤映射\n`;
       md += `- **测试耗时**: ${Math.round((Date.now() - startTime) / 1000)} 秒\n\n`;
@@ -614,20 +619,20 @@ export const Templates: React.FC = () => {
       md += localSteps
         .map(
           (s, idx) => {
-            let line = `${idx + 1}. [${s.status.toUpperCase()}] ${s.description}`;
-            if (s.error) line += `\n   - 错误: ${s.error}`;
+            let line = `${idx + 1}. [${s.status.toUpperCase()}] ${maskSensitiveText(s.description)}`;
+            if (s.error) line += `\n   - 错误: ${maskSensitiveText(s.error)}`;
             return line;
           }
         )
         .join("\n") + "\n\n";
       md += `#### 🚑 Healer 诊断自愈控制台日志:\n`;
       md += localLogs
-        .map((log) => `- [${log.timestamp}] ${log.message}`)
+        .map((log) => `- [${log.timestamp}] ${maskSensitiveText(log.message)}`)
         .join("\n");
 
       saveReport(
-        `场景模板 Agent 测试: ${selectedTemplate.name}`,
-        `测试参数集: ${name}`,
+        `场景模板 Agent 测试: ${maskSensitiveText(selectedTemplate.name)}`,
+        `测试参数集: ${maskSensitiveText(name)}`,
         success ? "success" : "failed",
         localSteps.length || 1,
         successCount,
@@ -1085,8 +1090,8 @@ export const Templates: React.FC = () => {
                                   }`}
                                 >
                                   {set.lastRunStatus === "success"
-                                    ? "SUCCESS"
-                                    : "FAILED"}
+                                    ? "成功"
+                                    : "失败"}
                                 </span>
                               )}
                             </div>
@@ -1459,7 +1464,7 @@ export const Templates: React.FC = () => {
                   <h5 className="text-[11px] font-bold text-text-primary uppercase tracking-wider flex items-center justify-between">
                     <span>测试执行步骤流 ({draftTemplate.steps.length})</span>
                     <span className="text-[9px] text-text-muted lowercase">
-                      action / description / targetHint
+                      动作 / 描述 / 元素提示
                     </span>
                   </h5>
 
@@ -1554,7 +1559,7 @@ export const Templates: React.FC = () => {
                       抽离的输入变量 ({draftTemplate.variables.length})
                     </span>
                     <span className="text-[9px] text-text-muted lowercase">
-                      variable / label / defaultVal
+                      变量 / 标签 / 默认值
                     </span>
                   </h5>
 

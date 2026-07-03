@@ -1,114 +1,131 @@
-# LogicGuard AI
+# 测试小助手
 
-全链路 AI 自动化测试桌面应用。在本地通过 CDP 控制 Chrome，结合 **云端大语言模型**（推荐 **DeepSeek 付费 API**）与 [Stagehand](https://github.com/browserbase/stagehand) 实现自然语言驱动的浏览器测试、场景模板回归与失败自愈。
+测试小助手是一个 Windows / macOS 桌面自动化测试工具。用户用自然语言描述任务，应用通过云端大模型生成操作，再由本机 Playwright + Stagehand sidecar 连接 Chrome CDP 执行。
 
-## 架构概览
+## 当前能力
 
+- Stagehand Agent 当前主执行路径
+- 确定性 Script、Classic Planner/Generator/Healer 代码保留为备用能力，当前 UI 不暴露切换入口
+- “测试设计”：将需求来源、场景模板、测试用例和回归套件串成一条流程，支持直接从需求生成用例，也支持基于场景模板扩展用例
+- 回归套件：已确认用例可加入套件并一键批量执行，执行结果写入用户报告
+- 用例执行优先走确定性 Script 生成与回放，适合沉淀发版前回归流程
+- 场景模板、参数集、执行日志、自愈记录和测试报告
+- 报告包含管理摘要、风险等级、发版建议、失败复现路径和技术日志
+- 本地管理员/普通用户登录
+- 管理员用户列表、创建用户、禁用用户和重置密码
+- 系统设置页展示本机数据存储位置，并可打开应用数据目录
+- 按用户隔离模型配置、模板和报告
+- API Key 保存到 Windows Credential Manager 或 macOS Keychain
+- 模型提供商提供 DeepSeek、OpenAI、通义千问、Kimi、智谱、豆包、Gemini、Ollama 和自定义 OpenAI Compatible 预设
+- 数据安全模式默认“严格脱敏”，发送给模型前会遮蔽手机号、身份证、邮箱、银行卡、薪资、部门等敏感值
+- 安装包内置 Node.js 22 和 sidecar，运行端无需安装 Node.js
+- Windows x64 NSIS 安装包
+- macOS Apple Silicon `.app` / `.dmg` 构建支持（当前未签名）
+
+当前版本不依赖 PocketBase、Tailscale、Ollama 或其他自建服务。每个用户配置自己的 Gemini 或 OpenAI Compatible API Key。
+
+## 架构
+
+```text
+React / Tauri WebView
+        │ invoke / event
+        ▼
+Rust 后端
+  ├─ 本地登录：SQLite + Argon2id
+  ├─ 系统凭据：Credential Manager / Keychain
+  ├─ 云模型请求
+  ├─ 用户报告存储
+  └─ sidecar 进程管理
+        │ JSON Lines + CDP
+        ▼
+内置 Node.js 22 + Playwright + Stagehand
+        │
+        ▼
+Chrome / Edge
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Tauri 桌面应用 (React)                                  │
-│  Dashboard · Templates · Reports · Settings             │
-└────────────────────┬────────────────────────────────────┘
-                     │ Tauri invoke
-┌────────────────────▼────────────────────────────────────┐
-│  Rust 后端 (llm.rs / browser.rs / reports.rs)           │
-└────────┬───────────────────────────────┬────────────────┘
-         │ HTTPS                          │ 子进程 JSON
-         ▼                                ▼
-┌─────────────────┐              ┌──────────────────────┐
-│ DeepSeek API    │  ← 推荐      │ sidecar (Playwright  │
-│ (付费云端推理)   │              │ + Stagehand)         │
-└─────────────────┘              └──────────┬───────────┘
-                                            │ CDP
-                                            ▼
-                                   ┌─────────────────┐
-                                   │ Chrome :9222    │
-                                   └─────────────────┘
-```
 
-浏览器在本地执行；AI 推理**推荐云端接入**，无需自建家里算力。本地 Ollama 可作为降本备选，但对 Stagehand 复杂任务能力有限。
+## 安装版首次使用
 
-**三种执行模式**（Dashboard 可切换）：
+1. 安装并启动测试小助手。
+2. 首次启动创建本机管理员账号。
+3. 管理员可在“系统设置”中创建普通用户。
+4. 当前用户配置模型 Provider、Model、Base URL（如需要）和自己的 API Key。
+5. 点击“测试并保存配置”。
+6. 设置 CDP 端口并点击“一键启动受控浏览器”。
+7. 在浏览器中完成目标系统登录，然后开始自动化任务。
+8. 如需部门测试流程，进入“测试设计”页粘贴需求，或先从需求文档建模生成场景模板，再生成并确认用例，最后加入回归套件执行。
 
-| 模式 | 说明 |
-| --- | --- |
-| **Stagehand**（默认） | 自然语言目标 → Stagehand 闭环 Agent 自主执行 |
-| **Script** | LLM 一次生成测试脚本 → 确定性回放，失败时 Stagehand 愈合 |
-| **Classic** | Planner 拆解计划 → 逐步 LLM 决策 → Healer 文本重试 |
+API Key 不写入 localStorage、SQLite、日志或报告。登录是本机应用级隔离，不用于抵御拥有操作系统管理员权限的攻击者。
+人事测试环境默认按敏感数据处理；严格脱敏只能降低传给模型的文本风险，仍建议测试环境使用虚构员工数据。
 
-详细设计见 [开发文档.md](./开发文档.md)。
-
-## 快速开始
+## 本地开发
 
 ### 环境要求
 
-- Node.js 18+
-- Rust（Tauri 构建）
-- Google Chrome
-- DeepSeek API Key（[platform.deepseek.com](https://platform.deepseek.com)）
-
-### 安装与运行
+- Node.js `22.x`
+- Rust stable
+- Google Chrome 或 Microsoft Edge
 
 ```bash
-# 克隆仓库后，安装前端依赖
-npm install
-
-# 安装 Sidecar 依赖（Playwright + Stagehand，必需）
-cd sidecar && npm install && cd ..
-
-# 开发模式启动
+npm ci
+npm run lint
+npm run build
 npm run tauri dev
 ```
 
-### 首次配置（推荐：DeepSeek）
+开发模式允许使用项目根目录下的 `sidecar/` 和系统 Node；发布模式只使用安装包内资源。
 
-1. 打开 **Settings**，配置 LLM：
-   - Provider：`openai_compat`
-   - Base URL：`https://api.deepseek.com`
-   - Model：`deepseek-chat`
-   - API Key：你的 DeepSeek 密钥
-2. 点击 **测试连接** 确认可用
-3. 点击 **启动 Chrome（CDP）**，或手动运行：
-   ```bash
-   chrome.exe --remote-debugging-port=9222 --user-data-dir="%APPDATA%\LogicGuardAI\ChromeProfile"
-   ```
-4. 在 **Dashboard** 输入自然语言测试任务，默认 Stagehand 模式即可开始
+## 构建安装包
 
-> 也可改用 Gemini、通义千问等 OpenAI 兼容端点；本地 Ollama 见 [零成本部署附录.md](./零成本部署附录.md)（可选，能力有限）。
+Windows x64：
 
-### 生产构建
+```powershell
+npm run bundle:windows
+```
+
+输出：`src-tauri/target/release/bundle/nsis/测试小助手_0.1.0_x64-setup.exe`
+
+macOS Apple Silicon：
 
 ```bash
-npm run tauri build
+npm run bundle:macos
+```
+
+macOS 包必须在 Apple Silicon Mac 上构建。当前包未签名、未公证，首次打开需要通过 Finder 右键“打开”或在“隐私与安全性”中允许。
+
+完整构建与发布检查见 [BUILDING.md](./BUILDING.md)。
+
+## 项目结构
+
+```text
+src/                       React 页面、API 桥接和执行编排
+src-tauri/src/             Rust 命令、登录、模型、报告和浏览器控制
+sidecar/                   Playwright + Stagehand 浏览器引擎
+scripts/                   前端构建与 sidecar 资源准备脚本
+src-tauri/resources/       构建时生成的内置 Runtime（不提交）
+.codex/skills/             项目开发技能与文档同步规范
 ```
 
 ## 文档
 
-| 文档 | 说明 |
-| --- | --- |
-| [开发文档.md](./开发文档.md) | 权威技术文档：架构、API、DeepSeek 配置、故障排查 |
-| [零成本部署附录.md](./零成本部署附录.md) | **可选**本地 Ollama + Tailscale（非主力方案） |
-| [sidecar/README.md](./sidecar/README.md) | Sidecar 命令与依赖说明 |
-
-## 项目结构
-
-```
-src/           React 前端与执行编排 (agents/)
-src-tauri/     Rust 后端
-sidecar/       Playwright + Stagehand 浏览器引擎
-```
+- [开发文档.md](./开发文档.md)：当前实现、接口、数据、安全和开发规范
+- [零成本部署附录.md](./零成本部署附录.md)：不部署服务器的安装与维护方案
+- [BUILDING.md](./BUILDING.md)：Windows / macOS 安装包构建步骤
+- [sidecar/README.md](./sidecar/README.md)：sidecar 命令协议
 
 ## 常见问题
 
-- **CDP 连接失败 `ECONNREFUSED ::1:9222`**：先启动 Chrome CDP，使用 `127.0.0.1` 而非 `localhost`
-- **Stagehand 依赖缺失**：在 `sidecar/` 目录执行 `npm install`
-- **LLM 连接失败**：确认 DeepSeek API Key 有效，Base URL 为 `https://api.deepseek.com`（无需手动加 `/v1`）
-- 更多见 [开发文档 §13.2](./开发文档.md#132-常见问题faq)
+- **提示未配置 API Key**：登录当前用户后到“系统设置”保存并测试密钥；顶部状态栏也提供“去设置”快捷入口。
+- **CDP 连接失败**：先点击“一键启动受控浏览器”，并确认端口未被占用。
+- **安装版提示 sidecar 资源缺失**：重新安装应用；发布版不会回退到系统 Node。
+- **macOS 无法直接打开**：当前为内部未签名包，按上面的 Gatekeeper 说明操作。
+- **构建提示 Node 版本错误**：切换到 Node 22 后重新执行 `npm ci`。
+- **本地运行报 `CustomEvent is not defined`**：当前终端仍在使用旧版 Node。确认 `node -v` 为 `22.x` 后重新执行 `npm ci` 和 `npm run tauri dev`。
 
 ## 技术栈
 
-React · Vite · Tailwind CSS · Tauri 2 · Playwright · Stagehand · DeepSeek API · Rust
+React 19 · TypeScript · Vite 8 · Tailwind CSS 4 · Tauri 2 · Rust · SQLite · Argon2id · Playwright · Stagehand
 
 ## 许可证
 
-私有项目 — LogicGuard AI 开发团队
+私有项目 — 测试小助手

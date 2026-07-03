@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, FileText, BarChart2, Settings, Terminal, ShieldAlert, Cpu } from 'lucide-react';
+import { LayoutDashboard, BarChart2, Settings, Terminal, ShieldAlert, Cpu, ClipboardList } from 'lucide-react';
 import type { SystemStatus } from '../types';
 
 interface SidebarProps {
@@ -11,7 +11,7 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, status }) => {
   const menuItems = [
     { id: 'dashboard', label: '任务控制台', icon: LayoutDashboard },
-    { id: 'templates', label: '场景模板', icon: FileText },
+    { id: 'testdesign', label: '测试设计', icon: ClipboardList },
     { id: 'reports', label: '测试报告', icon: BarChart2 },
     { id: 'settings', label: '系统设置', icon: Settings },
   ];
@@ -24,7 +24,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, statu
           <Terminal className="w-5 h-5 text-white" />
         </div>
         <div className="min-w-0">
-          <h1 className="font-bold text-xs tracking-wide text-text-primary truncate">LogicGuard AI</h1>
+          <h1 className="font-bold text-xs tracking-wide text-text-primary truncate">测试小助手</h1>
           <span className="text-[9px] text-text-muted font-medium uppercase tracking-wider block -mt-0.5">v1.0.0 Beta</span>
         </div>
       </div>
@@ -52,7 +52,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, statu
       </nav>
 
       {/* Connection & Run Info Footer */}
-      <div className="p-4 border-t border-border bg-surface-0/50 space-y-3">
+      <div className="hidden">
         <div className="p-3 rounded-lg bg-surface-2/60 border border-border space-y-2">
           <div className="flex items-center justify-between text-[11px]">
             <span className="text-text-muted flex items-center gap-1.5">

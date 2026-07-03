@@ -28,7 +28,12 @@ export const Layout: React.FC<LayoutProps> = ({
       {/* Main panel container */}
       <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden gap-4">
         {/* Header toolbar */}
-        <Header status={status} onRefresh={onRefresh} isRefreshing={isRefreshing} />
+        <Header
+          status={status}
+          onRefresh={onRefresh}
+          isRefreshing={isRefreshing}
+          onOpenSettings={() => setActiveTab('settings')}
+        />
 
         {/* Content area */}
         <main className="flex-1 min-h-0 min-w-0 overflow-hidden relative bg-surface-1 rounded-2xl border border-border shadow-md flex flex-col">

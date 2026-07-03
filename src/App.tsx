@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
 import { Templates } from './pages/Templates';
+import { TestCases } from './pages/TestCases';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import type { SystemStatus } from './types';
@@ -54,6 +55,12 @@ function AuthenticatedApp({ user }: { user: SessionUser }) {
         return <Dashboard />;
       case 'templates':
         return <Templates />;
+      case 'templateModeler':
+        return <Templates initialView="generate" />;
+      case 'testdesign':
+        return <TestCases onOpenTemplateModeler={() => setActiveTab('templateModeler')} />;
+      case 'testcases':
+        return <TestCases onOpenTemplateModeler={() => setActiveTab('templateModeler')} />;
       case 'reports':
         return <Reports />;
       case 'settings':
