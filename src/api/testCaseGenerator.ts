@@ -12,6 +12,48 @@ const TYPE_LABELS: Record<TestCaseType, string> = {
   combination: '多用户/多部门/多状态组合',
 };
 
+const TYPE_ORDER: TestCaseType[] = ['normal', 'boundary', 'empty', 'permission', 'repeat', 'combination'];
+
+function pickString(item: any, keys: string[], fallback = ''): string {
+  for (const key of keys) {
+    const value = item?.[key];
+    if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+  }
+  return fallback;
+}
+
+function pickArray(item: any, keys: string[]): unknown[] {
+  for (const key of keys) {
+    const value = item?.[key];
+    if (Array.isArray(value)) return value;
+  }
+  return [];
+}
+
+function pickObject(item: any, keys: string[]): Record<string, string> {
+  for (const key of keys) {
+    const value = item?.[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  }
+  return {};
+}
+
+function normalizeType(value: unknown, title: string, index: number): TestCaseType {
+  const raw = String(value ?? '').toLowerCase();
+  const probe = `${raw} ${title}`.toLowerCase();
+  if (/\bnormal\b|正常|主流程|happy/.test(probe)) return 'normal';
+  if (/\bboundary\b|边界|上限|下限|最大|最小|长度/.test(probe)) return 'boundary';
+  if (/\bempty\b|空值|为空|异常|非法|必填/.test(probe)) return 'empty';
+  if (/\bpermission\b|权限|越权|角色|无权/.test(probe)) return 'permission';
+  if (/\brepeat\b|重复|二次提交|重复提交|幂等/.test(probe)) return 'repeat';
+  if (/\bcombination\b|组合|多用户|多部门|多状态|状态流转/.test(probe)) return 'combination';
+  return TYPE_ORDER[index % TYPE_ORDER.length];
+}
+
+function genericTitle(type: TestCaseType, requirementTitle: string): string {
+  return `${TYPE_LABELS[type]}：${requirementTitle}`;
+}
+
 function buildPrompt(requirement: string, moduleName: string): string {
   return `你是一名谨慎的人事系统测试工程师。请根据下面需求生成测试用例，必须覆盖正常流程、边界值、空值/异常值、权限校验、重复提交、多用户/多部门/多状态组合。
 
@@ -92,27 +134,42 @@ export async function generateTestCasesFromRequirement(requirement: string, modu
     const parsed = extractJson(raw);
     if (!Array.isArray(parsed)) throw new Error('AI 未返回数组');
     const now = new Date().toISOString();
-    return parsed.map((item: any) => {
-      const type = ['normal', 'boundary', 'empty', 'permission', 'repeat', 'combination'].includes(item.type)
-        ? item.type as TestCaseType
-        : 'normal';
+    return parsed.map((item: any, itemIndex) => {
+      const rawTitle = pickString(item, ['title', 'caseTitle', 'name', '用例标题', '标题']);
+      const requirementTitle = pickString(
+        item,
+        ['requirementTitle', 'requirement_title', 'requirement', '需求标题', '需求'],
+        cleanRequirement.split(/\r?\n/).find(Boolean)?.slice(0, 40) || '未命名需求',
+      );
+      const type = normalizeType(
+        item.type ?? item.caseType ?? item.testType ?? item['用例类型'] ?? item['类型'],
+        rawTitle,
+        itemIndex,
+      );
+      const preconditions = pickArray(item, ['preconditions', 'pre_conditions', '前置条件']);
+      const rawSteps = pickArray(item, ['steps', 'testSteps', '测试步骤', '步骤']);
+      const steps = rawSteps.map((step: any, index: number) => ({
+        order: Number(step.order || step.step || step['序号'] || index + 1),
+        action: pickString(step, ['action', 'description', 'step', '操作步骤', '步骤描述', '操作'], `按${TYPE_LABELS[type]}场景执行第 ${index + 1} 步`),
+        expectedResult: pickString(step, ['expectedResult', 'expected_result', 'expected', '预期结果', '步骤预期'], '系统反馈符合预期'),
+      }));
       return {
         id: `case_${crypto.randomUUID()}`,
-        title: String(item.title || `${TYPE_LABELS[type]}测试`),
-        requirementTitle: String(item.requirementTitle || item.requirement_title || '未命名需求'),
-        module: String(item.module || moduleName || '人事系统'),
+        title: rawTitle && rawTitle !== '正常流程测试' ? rawTitle : genericTitle(type, requirementTitle),
+        requirementTitle,
+        module: pickString(item, ['module', '模块'], moduleName || '人事系统'),
         sourceKind: 'requirement',
         type,
-        priority: ['P0', 'P1', 'P2', 'P3'].includes(item.priority) ? item.priority : 'P1',
-        riskPoint: String(item.riskPoint || item.risk_point || '需求覆盖不足'),
-        preconditions: Array.isArray(item.preconditions) ? item.preconditions.map(String) : ['已登录测试环境'],
-        testData: typeof item.testData === 'object' && item.testData ? item.testData : {},
-        steps: Array.isArray(item.steps) ? item.steps.map((step: any, index: number) => ({
-          order: Number(step.order || index + 1),
-          action: String(step.action || step.description || ''),
-          expectedResult: String(step.expectedResult || step.expected_result || ''),
-        })) : [],
-        expectedResult: String(item.expectedResult || item.expected_result || ''),
+        priority: ['P0', 'P1', 'P2', 'P3'].includes(item.priority) ? item.priority : (type === 'normal' || type === 'permission' ? 'P0' : 'P1'),
+        riskPoint: pickString(item, ['riskPoint', 'risk_point', 'risk', '风险点'], `${TYPE_LABELS[type]}覆盖不足`),
+        preconditions: preconditions.length ? preconditions.map(String) : ['已登录测试环境'],
+        testData: pickObject(item, ['testData', 'test_data', '测试数据']),
+        steps: steps.length ? steps : [
+          { order: 1, action: `进入${moduleName || '人事系统'}相关页面`, expectedResult: '页面正常打开且无权限异常' },
+          { order: 2, action: `按${TYPE_LABELS[type]}场景填写或查询测试数据`, expectedResult: '系统给出符合预期的业务反馈' },
+          { order: 3, action: '提交或保存后检查结果', expectedResult: '数据状态、提示信息和列表结果正确' },
+        ],
+        expectedResult: pickString(item, ['expectedResult', 'expected_result', 'expected', '预期结果'], '系统行为符合需求。'),
         isBoundary: type === 'boundary',
         isRepeat: type === 'repeat' || type === 'combination',
         status: 'draft',

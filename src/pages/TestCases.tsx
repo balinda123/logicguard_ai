@@ -204,6 +204,28 @@ export const TestCases: React.FC<TestCasesProps> = ({ onOpenTemplateModeler }) =
     setCases(next);
   };
 
+  const caseKey = (testCase: TestCase) => [
+    testCase.templateId || 'no-template',
+    testCase.module.trim(),
+    testCase.requirementTitle.trim(),
+    testCase.type,
+    testCase.title.trim(),
+  ].join('|').toLowerCase();
+
+  const mergeUniqueCases = (generated: TestCase[], existing: TestCase[]) => {
+    const seen = new Set(existing.map(caseKey));
+    const uniqueGenerated = generated.filter((testCase) => {
+      const key = caseKey(testCase);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return {
+      uniqueGenerated,
+      nextCases: [...uniqueGenerated, ...existing],
+    };
+  };
+
   const handleGenerate = async () => {
     if (!requirement.trim()) {
       window.alert('请先输入需求或场景描述');
@@ -212,7 +234,11 @@ export const TestCases: React.FC<TestCasesProps> = ({ onOpenTemplateModeler }) =
     setGenerating(true);
     try {
       const generated = await generateTestCasesFromRequirement(requirement, moduleName);
-      refreshCases([...generated, ...cases]);
+      const { uniqueGenerated, nextCases } = mergeUniqueCases(generated, cases);
+      refreshCases(nextCases);
+      if (uniqueGenerated.length < generated.length) {
+        window.alert(`已跳过 ${generated.length - uniqueGenerated.length} 条重复用例`);
+      }
     } finally {
       setGenerating(false);
     }
@@ -226,7 +252,11 @@ export const TestCases: React.FC<TestCasesProps> = ({ onOpenTemplateModeler }) =
     setGenerating(true);
     try {
       const generated = await generateTestCasesFromTemplate(selectedTemplate);
-      refreshCases([...generated, ...cases]);
+      const { uniqueGenerated, nextCases } = mergeUniqueCases(generated, cases);
+      refreshCases(nextCases);
+      if (uniqueGenerated.length < generated.length) {
+        window.alert(`已跳过 ${generated.length - uniqueGenerated.length} 条重复用例`);
+      }
     } finally {
       setGenerating(false);
     }
