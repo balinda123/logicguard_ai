@@ -58,9 +58,9 @@ function AuthenticatedApp({ user }: { user: SessionUser }) {
       case 'templateModeler':
         return <Templates initialView="generate" />;
       case 'testdesign':
-        return <TestCases onOpenTemplateModeler={() => setActiveTab('templateModeler')} />;
+        return <TestCases />;
       case 'testcases':
-        return <TestCases onOpenTemplateModeler={() => setActiveTab('templateModeler')} />;
+        return <TestCases />;
       case 'reports':
         return <Reports />;
       case 'settings':
