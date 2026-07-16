@@ -1,10 +1,15 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type ViteUserConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss()] as unknown as ViteUserConfig['plugins'],
+  test: {
+    environment: 'jsdom',
+    setupFiles: './src/test/setup.ts',
+    clearMocks: true,
+  },
   // Tauri expects a fixed port
   server: {
     port: 1420,
@@ -18,4 +23,3 @@ export default defineConfig({
     sourcemap: !!process.env.TAURI_DEBUG,
   },
 })
-
