@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -95,6 +95,14 @@ function rail(step: number, title: string) {
   return screen.getByRole('button', { name: new RegExp(`^${step}.*${title}`) })
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(promiseResolve => {
+    resolve = promiseResolve
+  })
+  return { promise, resolve }
+}
+
 async function enterRequirement(value = 'Acceptance criteria') {
   const user = userEvent.setup()
   await user.type(screen.getByLabelText('需求或验收标准'), value)
@@ -134,6 +142,22 @@ describe('TestCases wizard', () => {
     await enterRequirement()
 
     expect(rail(2, '生成用例')).toBeEnabled()
+  })
+
+  it('uses an existing template selected on step 1 as a source', async () => {
+    loadTemplatesMock.mockReturnValue([savedTemplate])
+    render(<TestCases />)
+    const user = userEvent.setup()
+
+    expect(rail(2, '生成用例')).toBeDisabled()
+    await user.selectOptions(screen.getByRole('combobox', { name: '已有场景模板（可选）' }), savedTemplate.id)
+
+    expect(rail(2, '生成用例')).toBeEnabled()
+    await user.click(rail(2, '生成用例'))
+    await user.click(screen.getByRole('button', { name: '基于场景模板生成' }))
+
+    await waitFor(() => expect(templateGenerateMock).toHaveBeenCalledWith(savedTemplate))
+    expect(await screen.findByRole('heading', { name: '检查确认' })).toBeVisible()
   })
 
   it('returns from the modeler with requirement and module inputs preserved', async () => {
@@ -228,5 +252,51 @@ describe('TestCases wizard', () => {
     expect(screen.getByRole('heading', { name: '需求来源' })).toBeVisible()
     expect(rail(3, '检查确认')).toBeDisabled()
     expect(rail(4, '回归执行')).toBeDisabled()
+  })
+
+  it('ignores a direct-generation response when its source revision becomes stale', async () => {
+    const pending = deferred<TestCase[]>()
+    directGenerateMock.mockReturnValue(pending.promise)
+    loadTemplatesMock.mockReturnValue([savedTemplate])
+    render(<TestCases />)
+    const user = await enterRequirement()
+    await user.click(rail(2, '生成用例'))
+
+    await user.click(screen.getByRole('button', { name: '直接从需求生成' }))
+    expect(rail(1, '需求来源')).toBeDisabled()
+    const templateSelector = screen.getByRole('combobox', { name: '场景模板' })
+    expect(templateSelector).toBeDisabled()
+    fireEvent.change(templateSelector, { target: { value: savedTemplate.id } })
+    pending.resolve([draftCase])
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: '生成用例' })).toBeVisible())
+    expect(screen.queryByRole('heading', { name: '检查确认' })).not.toBeInTheDocument()
+    expect(rail(3, '检查确认')).toBeDisabled()
+  })
+
+  it('stays on generation with a visible notice when generation returns no cases', async () => {
+    directGenerateMock.mockResolvedValue([])
+    render(<TestCases />)
+    const user = await enterRequirement()
+    await user.click(rail(2, '生成用例'))
+
+    await user.click(screen.getByRole('button', { name: '直接从需求生成' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('未生成任何测试用例')
+    expect(screen.getByRole('heading', { name: '生成用例' })).toBeVisible()
+    expect(rail(3, '检查确认')).toBeDisabled()
+  })
+
+  it('opens persisted drafts in review and unlocks persisted confirmed cases after review is entered', async () => {
+    loadCasesMock.mockReturnValue([{ ...draftCase, status: 'confirmed' }])
+    render(<TestCases />)
+    const user = userEvent.setup()
+
+    expect(rail(3, '检查确认')).toBeEnabled()
+    expect(rail(4, '回归执行')).toBeDisabled()
+    await user.click(rail(3, '检查确认'))
+
+    expect(screen.getByText('Draft case')).toBeVisible()
+    expect(rail(4, '回归执行')).toBeEnabled()
   })
 })

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   AlertTriangle,
@@ -28,7 +28,7 @@ import { generateTestScript } from '../agents/scriptGenerator';
 import { executeTestScript } from '../agents/scriptExecutor';
 import { maskSensitiveText, securityModeLabel, getDataSecurityConfig } from '../utils/privacy';
 import { RequirementModeler } from './RequirementModeler';
-import { highestUnlockedTestDesignStep, type TestDesignStep } from './testDesignWizard';
+import { clampTestDesignStep, highestUnlockedTestDesignStep, type TestDesignStep } from './testDesignWizard';
 
 const TYPE_LABEL: Record<TestCase['type'], string> = {
   normal: '正常流程',
@@ -173,6 +173,8 @@ export const TestCases: React.FC = () => {
   const [requirementRevision, setRequirementRevision] = useState(0);
   const [generatedRevision, setGeneratedRevision] = useState<number | null>(null);
   const [reviewReached, setReviewReached] = useState(false);
+  const [generationNotice, setGenerationNotice] = useState<string | null>(null);
+  const requirementRevisionRef = useRef(0);
 
   useEffect(() => {
     const loadedCases = loadTestCases();
@@ -220,15 +222,17 @@ export const TestCases: React.FC = () => {
   ];
 
   const requestStep = (requested: TestDesignStep) => {
-    if (requested <= step || requested <= highestUnlockedStep) {
-      if (requested === 3) setReviewReached(true);
-      setStep(requested);
-    }
+    if (generating) return;
+    const nextStep = clampTestDesignStep(requested, highestUnlockedStep);
+    if (nextStep === 3) setReviewReached(true);
+    setStep(nextStep);
   };
 
   const markRequirementChanged = () => {
-    setRequirementRevision((revision) => revision + 1);
+    requirementRevisionRef.current += 1;
+    setRequirementRevision(requirementRevisionRef.current);
     setReviewReached(false);
+    setGenerationNotice(null);
   };
 
   const handleTemplateSaved = (savedTemplate: ScenarioTemplate) => {
@@ -275,12 +279,19 @@ export const TestCases: React.FC = () => {
       window.alert('请先输入需求或场景描述');
       return;
     }
+    const sourceRevision = requirementRevisionRef.current;
     setGenerating(true);
+    setGenerationNotice(null);
     try {
       const generated = await generateTestCasesFromRequirement(requirement, moduleName);
+      if (sourceRevision !== requirementRevisionRef.current) return;
+      if (generated.length === 0) {
+        setGenerationNotice('未生成任何测试用例，请检查需求后重试');
+        return;
+      }
       const { uniqueGenerated, nextCases } = mergeUniqueCases(generated, cases);
       refreshCases(nextCases);
-      setGeneratedRevision(requirementRevision);
+      setGeneratedRevision(sourceRevision);
       setReviewReached(true);
       setStep(3);
       if (uniqueGenerated.length < generated.length) {
@@ -296,12 +307,23 @@ export const TestCases: React.FC = () => {
       window.alert('请先选择一个场景模板');
       return;
     }
+    const sourceRevision = requirementRevisionRef.current;
+    const sourceTemplateId = selectedTemplate.id;
     setGenerating(true);
+    setGenerationNotice(null);
     try {
       const generated = await generateTestCasesFromTemplate(selectedTemplate);
+      if (
+        sourceRevision !== requirementRevisionRef.current
+        || sourceTemplateId !== selectedTemplateId
+      ) return;
+      if (generated.length === 0) {
+        setGenerationNotice('未生成任何测试用例，请检查模板后重试');
+        return;
+      }
       const { uniqueGenerated, nextCases } = mergeUniqueCases(generated, cases);
       refreshCases(nextCases);
-      setGeneratedRevision(requirementRevision);
+      setGeneratedRevision(sourceRevision);
       setReviewReached(true);
       setStep(3);
       if (uniqueGenerated.length < generated.length) {
@@ -513,7 +535,7 @@ export const TestCases: React.FC = () => {
                     type="button"
                     aria-label={`${item.id} ${item.title}${active ? ' 当前步骤' : completed ? ' 已完成' : locked ? ' 已锁定' : ''}`}
                     aria-current={active ? 'step' : undefined}
-                    disabled={locked}
+                    disabled={generating || locked}
                     onClick={() => requestStep(item.id)}
                     className={`w-full rounded-xl border p-3 text-left transition ${active ? 'border-brand-500/40 bg-brand-500/10 text-text-primary' : completed ? 'border-success/20 bg-success/5 text-text-secondary' : locked ? 'cursor-not-allowed border-border bg-surface-2/40 text-text-muted opacity-45' : 'border-border bg-surface-2/60 text-text-secondary hover:border-brand-500/30'}`}
                   >
@@ -531,10 +553,11 @@ export const TestCases: React.FC = () => {
             <div className="space-y-4">
               <div className="flex items-center justify-between gap-3 border-b border-border pb-3">
                 <div className="flex items-center gap-2"><ClipboardList className="h-4 w-4 text-brand-400" /><h3 className="text-sm font-bold text-text-primary">需求来源</h3></div>
-                <button type="button" onClick={() => setShowModeler(true)} className="flex h-8 items-center gap-1.5 rounded-lg border border-brand-500/20 bg-brand-500/10 px-3 text-[11px] font-semibold text-brand-400 hover:bg-brand-500/15"><Sparkles className="h-3.5 w-3.5" />从需求文档建模</button>
+                <button type="button" disabled={generating} onClick={() => setShowModeler(true)} className="flex h-8 items-center gap-1.5 rounded-lg border border-brand-500/20 bg-brand-500/10 px-3 text-[11px] font-semibold text-brand-400 hover:bg-brand-500/15 disabled:opacity-40"><Sparkles className="h-3.5 w-3.5" />从需求文档建模</button>
               </div>
-              <label className="block"><span className="mb-2 block text-xs font-semibold text-text-secondary">模块名称</span><input aria-label="模块名称" value={moduleName} onChange={(event) => { setModuleName(event.target.value); markRequirementChanged(); }} className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500" /></label>
-              <label className="block"><span className="mb-2 block text-xs font-semibold text-text-secondary">需求或验收标准</span><textarea aria-label="需求或验收标准" value={requirement} onChange={(event) => { setRequirement(event.target.value); markRequirementChanged(); }} className="min-h-36 w-full rounded-xl border border-border bg-surface-2 p-3 text-xs leading-relaxed text-text-primary outline-none focus:border-brand-500" placeholder="粘贴需求、场景描述或产品验收标准" /></label>
+              <label className="block"><span className="mb-2 block text-xs font-semibold text-text-secondary">模块名称</span><input aria-label="模块名称" disabled={generating} value={moduleName} onChange={(event) => { setModuleName(event.target.value); markRequirementChanged(); }} className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500 disabled:opacity-40" /></label>
+              <label className="block"><span className="mb-2 block text-xs font-semibold text-text-secondary">需求或验收标准</span><textarea aria-label="需求或验收标准" disabled={generating} value={requirement} onChange={(event) => { setRequirement(event.target.value); markRequirementChanged(); }} className="min-h-36 w-full rounded-xl border border-border bg-surface-2 p-3 text-xs leading-relaxed text-text-primary outline-none focus:border-brand-500 disabled:opacity-40" placeholder="粘贴需求、场景描述或产品验收标准" /></label>
+              {templates.length > 0 && <label className="block"><span className="mb-2 block text-xs font-semibold text-text-secondary">已有场景模板（可选）</span><select aria-label="已有场景模板（可选）" disabled={generating} value={selectedTemplateId} onChange={(event) => { setSelectedTemplateId(event.target.value); markRequirementChanged(); }} className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none disabled:opacity-40"><option value="">请选择模板</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>}
               {isStale && <p role="status" className="rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 text-xs text-warning">需求已修改，请重新生成测试用例</p>}
               <div className="rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 text-[11px] leading-relaxed text-warning">默认会先脱敏再发给模型；测试数据要求使用员工A、手机号_1、部门_1 等虚构值。</div>
             </div>
@@ -545,8 +568,9 @@ export const TestCases: React.FC = () => {
               <div className="flex items-center gap-2 border-b border-border pb-3"><FileText className="h-4 w-4 text-brand-400" /><h3 className="text-sm font-bold text-text-primary">生成用例</h3></div>
               <div className="grid gap-4 xl:grid-cols-2">
                 <div className="space-y-3 rounded-xl border border-border bg-surface-2/60 p-4"><h4 className="text-sm font-bold text-text-primary">直接从需求生成</h4><p className="text-xs text-text-muted">根据需求与模块生成覆盖正常、边界和异常场景的用例。</p><button type="button" onClick={handleGenerate} disabled={generating || !requirement.trim()} className="flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 text-xs font-semibold text-white hover:bg-brand-600 disabled:opacity-40">{generating ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}直接从需求生成</button></div>
-                <div className="space-y-3 rounded-xl border border-border bg-surface-2/60 p-4"><h4 className="text-sm font-bold text-text-primary">基于场景模板生成</h4><label className="block"><span className="mb-2 block text-[11px] text-text-muted">场景模板</span><select aria-label="场景模板" value={selectedTemplateId} onChange={(event) => { setSelectedTemplateId(event.target.value); markRequirementChanged(); }} className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none"><option value="">请选择模板</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>{selectedTemplate && <div className="space-y-1 rounded-lg border border-border bg-surface-1/60 p-3 text-[11px] text-text-muted"><div className="font-semibold text-text-primary">{selectedTemplate.name}</div><div>{selectedTemplate.description}</div><div>步骤：{selectedTemplate.steps.length} · 变量：{selectedTemplate.variables.length} · 参数集：{selectedTemplate.parameterSets?.length ?? 0}</div></div>}<button type="button" onClick={handleGenerateFromTemplate} disabled={generating || !selectedTemplate} className="flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-brand-500/20 bg-brand-500/10 text-xs font-semibold text-brand-400 hover:bg-brand-500/15 disabled:opacity-40">{generating ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}基于场景模板生成</button></div>
+                <div className="space-y-3 rounded-xl border border-border bg-surface-2/60 p-4"><h4 className="text-sm font-bold text-text-primary">基于场景模板生成</h4><label className="block"><span className="mb-2 block text-[11px] text-text-muted">场景模板</span><select aria-label="场景模板" disabled={generating} value={selectedTemplateId} onChange={(event) => { setSelectedTemplateId(event.target.value); markRequirementChanged(); }} className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none disabled:opacity-40"><option value="">请选择模板</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>{selectedTemplate && <div className="space-y-1 rounded-lg border border-border bg-surface-1/60 p-3 text-[11px] text-text-muted"><div className="font-semibold text-text-primary">{selectedTemplate.name}</div><div>{selectedTemplate.description}</div><div>步骤：{selectedTemplate.steps.length} · 变量：{selectedTemplate.variables.length} · 参数集：{selectedTemplate.parameterSets?.length ?? 0}</div></div>}<button type="button" onClick={handleGenerateFromTemplate} disabled={generating || !selectedTemplate} className="flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-brand-500/20 bg-brand-500/10 text-xs font-semibold text-brand-400 hover:bg-brand-500/15 disabled:opacity-40">{generating ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}基于场景模板生成</button></div>
               </div>
+              {generationNotice && <p role="status" className="rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 text-xs text-warning">{generationNotice}</p>}
             </div>
           )}
 
@@ -567,7 +591,7 @@ export const TestCases: React.FC = () => {
             </div>
           )}
 
-          {step > 1 && <footer className="flex justify-start border-t border-border pt-4"><button type="button" onClick={() => requestStep((step - 1) as TestDesignStep)} className="h-9 rounded-lg border border-border bg-surface-2 px-4 text-xs font-semibold text-text-secondary hover:text-text-primary">上一步</button></footer>}
+          {step > 1 && <footer className="flex justify-start border-t border-border pt-4"><button type="button" disabled={generating} onClick={() => requestStep((step - 1) as TestDesignStep)} className="h-9 rounded-lg border border-border bg-surface-2 px-4 text-xs font-semibold text-text-secondary hover:text-text-primary disabled:opacity-40">上一步</button></footer>}
         </section>
       </div>
     </div>
