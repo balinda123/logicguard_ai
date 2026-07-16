@@ -21,10 +21,10 @@ export function highestUnlockedTestDesignStep(input: {
   hasCases: boolean
   hasConfirmedCases: boolean
 }): TestDesignStep {
+  if (!input.hasRequirement) return 1
+  if (!input.hasCases) return 2
   if (input.hasConfirmedCases) return 4
-  if (input.hasCases) return 3
-  if (input.hasRequirement) return 2
-  return 1
+  return 3
 }
 
 export function clampTestDesignStep(

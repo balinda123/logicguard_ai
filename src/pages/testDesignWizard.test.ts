@@ -46,6 +46,26 @@ describe('test design wizard rules', () => {
     ).toBe(4)
   })
 
+  it('does not unlock later steps when the requirement prerequisite is missing', () => {
+    expect(
+      highestUnlockedTestDesignStep({
+        hasRequirement: false,
+        hasCases: true,
+        hasConfirmedCases: true,
+      }),
+    ).toBe(1)
+  })
+
+  it('does not unlock confirmation when generated cases are missing', () => {
+    expect(
+      highestUnlockedTestDesignStep({
+        hasRequirement: true,
+        hasCases: false,
+        hasConfirmedCases: true,
+      }),
+    ).toBe(2)
+  })
+
   it('blocks forward jumps and permits backward navigation', () => {
     expect(clampTestDesignStep(4, 2)).toBe(2)
     expect(clampTestDesignStep(1, 4)).toBe(1)
