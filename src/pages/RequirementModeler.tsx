@@ -59,9 +59,8 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
   }
 
   function goTo(nextStep: ModelerStep) {
-    if (nextStep <= highestStep) {
+    if (!busy && nextStep <= highestStep) {
       setStep(nextStep)
-      setError(null)
     }
   }
 
@@ -140,6 +139,7 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
   }
 
   const updateDraft = (patch: Partial<ScenarioTemplate>) => {
+    setError(null)
     setDraft(current => (current ? { ...current, ...patch } : current))
   }
 
@@ -165,7 +165,7 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                 <button
                   type="button"
                   aria-current={step === item ? 'step' : undefined}
-                  disabled={item > highestStep}
+                  disabled={busy !== null || item > highestStep}
                   onClick={() => goTo(item)}
                   className={`w-full rounded-lg px-3 py-3 text-left ${
                     step === item ? 'bg-cyan-500/20 text-cyan-200' : 'text-slate-400'
@@ -188,9 +188,11 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                 <span className="mb-2 block">闇€姹傛枃妗ｇ綉鍧€</span>
                 <input
                   value={url}
+                  disabled={busy !== null}
                   onChange={event => {
                     const nextUrl = event.target.value
                     setUrl(nextUrl)
+                    setError(null)
                     invalidateCapture(nextUrl, keyword)
                   }}
                   onBlur={() => setUrlTouched(true)}
@@ -220,20 +222,23 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                 <span className="mb-2 block">鍏抽敭璇嶈繃婊わ紙鍙€夛級</span>
                 <input
                   value={keyword}
+                  disabled={busy !== null}
                   onChange={event => {
                     const nextKeyword = event.target.value
                     setKeyword(nextKeyword)
+                    setError(null)
                     invalidateCapture(url, nextKeyword)
                   }}
                   className="w-full rounded-lg border border-slate-700 bg-slate-950 p-3"
                 />
               </label>
               <div className="flex gap-3">
-                <button type="button" onClick={() => setStep(1)} className="rounded-lg border px-4 py-2">
+                <button type="button" disabled={busy !== null} onClick={() => setStep(1)} className="rounded-lg border px-4 py-2">
                   涓婁竴姝
                 </button>
                 <button
                   type="button"
+                  disabled={busy !== null}
                   onClick={() => advance(3)}
                   className="rounded-lg bg-cyan-500 px-4 py-2 text-slate-950"
                 >
@@ -256,13 +261,18 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                   缃戝潃鎴栧叧閿瘝宸插彉鍖栵紝璇烽噸鏂版姄鍙朻
                 </p>
               )}
+              {!validUrl && (
+                <p role="alert" className="text-sm text-rose-300">
+                  璇疯緭鍏ユ湁鏁堢殑 HTTP(S) 缃戝潃
+                </p>
+              )}
               <div className="flex gap-3">
                 <button type="button" disabled={busy !== null} onClick={() => setStep(2)} className="rounded-lg border px-4 py-2">
                   涓婁竴姝
                 </button>
                 <button
                   type="button"
-                  disabled={busy !== null}
+                  disabled={busy !== null || !validUrl}
                   onClick={capturePage}
                   className="rounded-lg bg-cyan-500 px-4 py-2 text-slate-950 disabled:opacity-40"
                 >
@@ -279,7 +289,10 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                 <textarea
                   rows={10}
                   value={docText}
-                  onChange={event => setDocText(event.target.value)}
+                  onChange={event => {
+                    setDocText(event.target.value)
+                    setError(null)
+                  }}
                   className="w-full rounded-lg border border-slate-700 bg-slate-950 p-3"
                 />
               </label>
