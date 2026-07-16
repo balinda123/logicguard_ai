@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
-import { Templates } from './pages/Templates';
 import { TestCases } from './pages/TestCases';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
@@ -53,13 +52,7 @@ function AuthenticatedApp({ user }: { user: SessionUser }) {
     switch (activeTab) {
       case 'dashboard':
         return <Dashboard />;
-      case 'templates':
-        return <Templates />;
-      case 'templateModeler':
-        return <Templates initialView="generate" />;
       case 'testdesign':
-        return <TestCases />;
-      case 'testcases':
         return <TestCases />;
       case 'reports':
         return <Reports />;
