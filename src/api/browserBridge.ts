@@ -13,6 +13,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { PageContext, InteractiveElement } from '../types';
 import { getLlmConfig } from './llmBridge';
+import { sanitizeForLlm } from '../utils/privacy';
 
 // Rust 返回的字段名是 snake_case，前端 TypeScript 用 camelCase
 // 这个接口对应 browser.rs 里的 PageSnapshot 结构体
@@ -40,9 +41,9 @@ function mapElement(el: RustInteractiveElement): InteractiveElement {
   return {
     index: el.index,
     tag: el.tag,
-    text: el.text,
+    text: sanitizeForLlm(el.text),
     type: el.type,
-    placeholder: el.placeholder,
+    placeholder: sanitizeForLlm(el.placeholder),
     role: el.role,
     disabled: el.disabled,
     selector: el.selector,
@@ -93,11 +94,20 @@ export async function getPageContent(keyword?: string): Promise<{
   paragraphCount: number;
 }> {
   const config = getLlmConfig();
-  return await invoke('browser_get_page_content', {
+  const result = await invoke<{
+    url: string;
+    title: string;
+    content: string;
+    totalChars: number;
+    filteredChars: number;
+    keyword: string | null;
+    paragraphCount: number;
+  }>('browser_get_page_content', {
     port: getCdpPort(),
     keyword: keyword?.trim() || null,
     config,
   });
+  return { ...result, title: sanitizeForLlm(result.title), content: sanitizeForLlm(result.content) };
 }
 
 // ─── 获取页面快照 ──────────────────────────────────────────────
@@ -110,7 +120,7 @@ export async function getPageSnapshot(): Promise<PageContext> {
 
   return {
     url: snapshot.url,
-    title: snapshot.title,
+    title: sanitizeForLlm(snapshot.title),
     interactiveElements: snapshot.interactive_elements.map(mapElement),
   };
 }
@@ -231,7 +241,7 @@ export async function executeBrowserAction(
 export async function browserAct(instruction: string): Promise<BrowserActionResult> {
   const config = getLlmConfig();
   return await invoke<BrowserActionResult>('browser_act', {
-    instruction,
+    instruction: sanitizeForLlm(instruction),
     port: getCdpPort(),
     config,
   });
@@ -243,7 +253,7 @@ export async function browserAct(instruction: string): Promise<BrowserActionResu
 export async function browserObserve(instruction: string): Promise<any> {
   const config = getLlmConfig();
   return await invoke<any>('browser_observe', {
-    instruction,
+    instruction: sanitizeForLlm(instruction),
     port: getCdpPort(),
     config,
   });

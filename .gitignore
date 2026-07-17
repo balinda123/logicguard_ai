@@ -13,6 +13,7 @@ dist-ssr
 *.local
 .npm-cache
 .runtime-cache
+.superpowers/sdd/
 src-tauri/resources/runtime/*
 src-tauri/resources/sidecar/*
 !src-tauri/resources/runtime/.gitkeep

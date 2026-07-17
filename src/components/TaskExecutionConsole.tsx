@@ -195,7 +195,7 @@ export const TaskExecutionConsole: React.FC<TaskExecutionConsoleProps> = ({
                               : 'bg-surface-3 text-text-muted'
                       }`}
                     >
-                      {step.status === 'success' ? 'DONE' : step.status === 'running' ? 'RUNNING' : step.status === 'failed' ? 'FAIL' : 'PENDING'}
+                      {step.status === 'success' ? '完成' : step.status === 'running' ? '运行中' : step.status === 'failed' ? '失败' : '等待中'}
                     </span>
                     
                     {step.healed && (

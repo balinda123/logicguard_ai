@@ -13,6 +13,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getLlmConfig } from './llmBridge';
 import type { ScenarioTemplate } from '../types';
+import { sanitizeForLlm } from '../utils/privacy';
 
 // ─── Prompt 模板 ──────────────────────────────────────────────────────────────
 
@@ -167,7 +168,8 @@ export async function generateTemplateFromDocument(
   }
 
   const config = getLlmConfig();
-  const prompt = buildPrompt(documentText.trim(), targetUrl);
+  const sanitizedDocument = sanitizeForLlm(documentText.trim());
+  const prompt = buildPrompt(sanitizedDocument, targetUrl);
 
   onProgress?.('🧠 正在连接 AI 分析需求文档...');
 
@@ -176,7 +178,7 @@ export async function generateTemplateFromDocument(
     // 复用现有的 Rust LLM 通道（plan_task 接口，但用 context 传入 Prompt）
     // 实际上我们把整个 prompt 作为 userIntent 传入，context 留空
     raw = await invoke<string>('plan_task', {
-      userIntent: prompt,
+      userIntent: sanitizeForLlm(prompt),
       context: '请严格按照 JSON 格式输出，不要输出任何其他内容。',
       config,
     });
@@ -193,7 +195,7 @@ export async function generateTemplateFromDocument(
     throw new Error(String(e));
   }
 
-  const template = normalizeTemplate(parsed, documentText);
+  const template = normalizeTemplate(parsed, sanitizedDocument);
 
   onProgress?.(null as any);
   return template;

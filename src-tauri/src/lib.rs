@@ -2,6 +2,7 @@ mod llm;
 mod browser;
 mod reports;
 mod auth;
+mod storage;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -32,6 +33,8 @@ pub fn run() {
       auth::reset_user_password,
       auth::save_api_key,
       auth::credential_status,
+      storage::get_storage_locations,
+      storage::open_app_data_dir,
       // LLM 大模型相关命令
       llm::test_llm_connection,
       llm::plan_task,

@@ -1,65 +1,88 @@
 # LogicGuard Sidecar
 
-Node.js 浏览器控制子进程，由 Tauri Rust 后端（`src-tauri/src/browser.rs`）调度。通过 CDP 协议附着用户 Chrome，执行 Playwright 操作与 Stagehand AI 命令。
+Sidecar 是 LogicGuard AI 的 Node.js 浏览器自动化子进程，由 Tauri Rust 后端调用，负责连接 Chrome/Edge 的 CDP、执行 Playwright 操作，并在需要时调用 Stagehand/Agent 能力。
 
-完整协议与架构说明见 [开发文档 §5.3](../开发文档.md#53-sidecar-命令参考)。
+安装版会内置 Node Runtime、sidecar 脚本和生产依赖。最终用户不需要安装 Node.js，也不需要进入本目录执行 `npm install`。
 
-## 安装
+## 安装版运行方式
+
+打包时由 `npm run prepare:sidecar:*` 将以下内容复制到 Tauri resources：
+
+- 对应平台的 Node Runtime。
+- `sidecar/index.js` 及相关脚本。
+- sidecar 生产依赖。
+
+运行时 Rust 后端只从应用资源目录定位这些文件，不再依赖项目源码目录。
+
+## 开发调试
+
+只有在直接调试 sidecar CLI 时，才需要在项目源码中安装依赖：
 
 ```bash
 cd sidecar
 npm install
+node index.js check --port=9222
 ```
 
-Stagehand 3.4+ 需要 `@ai-sdk/*` 系列包，均已列入 `package.json`。若报错 `Cannot find package '@ai-sdk/...'`，请重新执行 `npm install`。
+产品主流程请优先从 Tauri 应用启动和调用 sidecar，避免开发命令与安装版行为不一致。
 
-## 调用方式
+## 调用格式
 
 ```bash
-node index.js <command> [--port=9222] [--key=value ...]
+node index.js <command> [--port=<cdp-port>] [--key=value ...]
 ```
 
-**响应**（stdout 最后一行）：
+stdout 最后一行返回 JSON：
 
 ```json
-{ "ok": true, "data": { ... } }
+{ "ok": true, "data": { "...": "..." } }
+```
+
+失败时：
+
+```json
 { "ok": false, "error": "..." }
 ```
 
-`agent` 命令额外输出 `[AGENT_STEP]{...}` 行供 Rust 流式解析。
+`agent` 命令会额外输出 `[AGENT_STEP]{...}` 行，Rust 后端会同时读取 stdout/stderr 并解析进度。
 
 ## 命令速查
 
-| 命令 | 说明 |
+| 命令 | 用途 |
 | --- | --- |
-| `get_snapshot` | 页面结构化快照（AX + DOM） |
-| `click` / `hover` / `type` / `press` | 元素操作，支持 `--strategy` + `--value` 七级定位 |
+| `check` | 检查 sidecar、浏览器和 CDP 连接状态 |
+| `get_snapshot` | 获取页面结构化快照 |
+| `get_page_content` | 获取页面文本/内容 |
+| `click` / `hover` / `type` / `press` | 基础元素操作 |
 | `navigate` | URL 导航 |
 | `select` | 下拉选择 |
-| `wait_for` | 等待元素 |
+| `wait_for` | 等待元素或状态 |
 | `assert` | 文本断言 |
-| `screenshot` | 截图到文件（未接入 Tauri） |
+| `screenshot` | 截图到文件 |
 | `act` | Stagehand 单步自然语言操作 |
-| `observe` | Stagehand 观察页面 |
-| `agent` | Stagehand 闭环 Agent（产品默认路径） |
+| `observe` | Stagehand 页面观察 |
+| `agent` | Stagehand 闭环 Agent 执行 |
 
-## 环境变量（Stagehand 命令）
+## 模型环境变量
 
-由 Rust 后端注入：
+这些变量由 Rust 后端按当前登录用户配置注入，sidecar 不负责保存 API Key。
 
 | 变量 | 说明 |
 | --- | --- |
-| `LLM_PROVIDER` | `openai_compat`（**DeepSeek 推荐**）/ `gemini` / `ollama` / `anthropic` |
-| `LLM_MODEL` | 如 `deepseek-chat` |
-| `LLM_API_KEY` | DeepSeek 等平台 API Key |
-| `LLM_BASE_URL` | 如 `https://api.deepseek.com`（OpenAI 兼容端点） |
+| `LLM_PROVIDER` | `openai_compat` 或 `gemini` |
+| `LLM_MODEL` | 当前用户选择的模型 |
+| `LLM_API_KEY` | 从 Windows Credential Manager 或 macOS Keychain 读取后临时注入 |
+| `LLM_BASE_URL` | OpenAI Compatible 服务地址 |
 
-## CDP 要求
+API Key 不应写入 localStorage、SQLite、日志、报告或本目录文件。
 
-- Chrome 须以 `--remote-debugging-port=9222` 启动
-- 连接使用 `127.0.0.1`，避免 `localhost` → `::1` 导致连接失败
-- 验证：`curl http://127.0.0.1:9222/json/version`
+## CDP 与浏览器约定
 
-## 日志
+- CDP 端口由 Rust 统一分配和传入，不再固定为 `9222`。
+- sidecar 连接 `127.0.0.1`，避免 `localhost` 被解析到 IPv6 `::1` 后连接失败。
+- 浏览器 Profile 使用系统应用数据目录下的 LogicGuard 专用目录。
+- Windows 支持 Chrome/Edge 常见安装路径；macOS Apple Silicon 支持 Chrome/Edge `.app` 路径检测。
 
-Script 模式定位失败后的 Stagehand 愈合日志：`../stagehand_healer.log`（项目根目录）。
+## 退出清理
+
+应用退出、任务取消或超时时，Rust 后端负责终止 sidecar 子进程和由应用启动的浏览器进程。sidecar 侧应避免产生脱离父进程管理的长期后台任务。

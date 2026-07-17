@@ -267,7 +267,7 @@ pub async fn route_llm(prompt: &str, config: &LlmConfig) -> Result<String, Strin
 /// Test LLM connectivity and return raw response
 #[command]
 pub async fn test_llm_connection(config: LlmConfig) -> Result<String, String> {
-    let test_prompt = r#"Reply with exactly this JSON and nothing else: {"status":"ok","message":"LLM connection successful"}"#;
+    let test_prompt = r#"请只回复这个 JSON，不要输出其他内容：{"status":"ok","message":"模型连接成功"}"#;
     route_llm(test_prompt, &config).await
 }
 

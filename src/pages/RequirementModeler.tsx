@@ -14,10 +14,10 @@ export interface RequirementModelerProps {
 }
 
 const stepLabels: Record<ModelerStep, string> = {
-  1: '杈撳叆缃戝潃',
-  2: '璁剧疆鍏抽敭璇峘',
-  3: '鎶撳彇缃戦〉',
-  4: 'AI 寤烘ā',
+  1: '输入网址',
+  2: '设置关键词',
+  3: '抓取网页',
+  4: 'AI 建模',
 }
 
 function messageFrom(error: unknown, fallback: string) {
@@ -79,23 +79,23 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
     setDraft(null)
     setCaptureInvalidated(false)
     setHighestStep(3)
-    setStatus('姝ｅ湪鎵撳紑骞舵姄鍙栫綉椤?..')
+    setStatus('正在打开并抓取网页…')
     try {
       const normalizedUrl = url.trim()
       const normalizedKeyword = keyword.trim()
       await browserNavigate(normalizedUrl)
       const result = await getPageContent(normalizedKeyword || undefined)
       if (!result.content.trim()) {
-        throw new Error('鏈姄鍙栧埌鏈夋晥鐨勯渶姹傛鏂囷紝璇疯皟鏁村悗閲嶈瘯')
+        throw new Error('未抓取到有效的需求正文，请检查网页内容或关键词。')
       }
       setDocText(result.content)
       setCapturedInput({ url: normalizedUrl, keyword: normalizedKeyword })
       setDraft(null)
       setCaptureInvalidated(false)
-      setStatus('缃戦〉鎶撳彇瀹屾垚')
+      setStatus('网页抓取完成。')
       advance(4)
     } catch (caught) {
-      setError(messageFrom(caught, '鎶撳彇缃戦〉澶辫触锛岃閲嶈瘯'))
+      setError(messageFrom(caught, '打开或抓取网页失败，请重试。'))
       setStatus(null)
     } finally {
       setBusy(null)
@@ -106,16 +106,16 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
     if (busy || !capturedInput || !docText.trim()) return
     setBusy('generate')
     setError(null)
-    setStatus('AI 姝ｅ湪寤烘ā...')
+    setStatus('AI 正在解析需求并建模…')
     try {
       const generated = await generateTemplateFromDocument(docText, {
         targetUrl: url.trim(),
         onProgress: progress => setStatus(progress),
       })
       setDraft(generated)
-      setStatus('AI 寤烘ā瀹屾垚')
+      setStatus('AI 建模完成。')
     } catch (caught) {
-      setError(messageFrom(caught, 'AI 寤烘ā澶辫触锛岃閲嶈瘯'))
+      setError(messageFrom(caught, 'AI 建模失败，请重试。'))
       setStatus(null)
     } finally {
       setBusy(null)
@@ -126,12 +126,12 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
     if (busy || !draft) return
     setBusy('save')
     setError(null)
-    setStatus('姝ｅ湪淇濆瓨妯℃澘...')
+    setStatus('正在保存模板…')
     try {
       await Promise.resolve(saveCustomTemplate(draft))
       onSaved(draft)
     } catch (caught) {
-      setError(messageFrom(caught, '淇濆瓨妯℃澘澶辫触锛岃閲嶈瘯'))
+      setError(messageFrom(caught, '保存模板失败，请重试。'))
       setStatus(null)
     } finally {
       setBusy(null)
@@ -153,12 +153,12 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
           <h1 className="text-2xl font-semibold">Requirement document modeling</h1>
         </div>
         <button type="button" onClick={onCancel} className="rounded-lg border px-4 py-2">
-          杩斿洖娴嬭瘯璁捐
+          返回测试设计
         </button>
       </div>
 
       <div className="grid gap-8 md:grid-cols-[15rem_1fr]">
-        <nav aria-label="寤烘ā姝ラ" className="border-l border-slate-700 pl-4">
+        <nav aria-label="建模步骤" className="border-l border-slate-700 pl-4">
           <ol className="space-y-3">
             {([1, 2, 3, 4] as ModelerStep[]).map(item => (
               <li key={item}>
@@ -185,7 +185,7 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
           {step === 1 && (
             <div className="space-y-5">
               <label className="block">
-                <span className="mb-2 block">闇€姹傛枃妗ｇ綉鍧€</span>
+                <span className="mb-2 block">需求文档网址</span>
                 <input
                   value={url}
                   disabled={busy !== null}
@@ -202,7 +202,7 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
               </label>
               {urlTouched && !validUrl && (
                 <p role="alert" className="text-sm text-rose-300">
-                  璇疯緭鍏ユ湁鏁堢殑 HTTP(S) 缃戝潃
+                  请输入有效的 HTTP(S) 网址。
                 </p>
               )}
               <button
@@ -211,7 +211,7 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                 onClick={() => advance(2)}
                 className="rounded-lg bg-cyan-500 px-4 py-2 text-slate-950 disabled:opacity-40"
               >
-                涓嬩竴姝ワ細璁剧疆鍏抽敭璇峘
+                下一步：设置关键词
               </button>
             </div>
           )}
@@ -219,7 +219,7 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
           {step === 2 && (
             <div className="space-y-5">
               <label className="block">
-                <span className="mb-2 block">鍏抽敭璇嶈繃婊わ紙鍙€夛級</span>
+                <span className="mb-2 block">关键词过滤（可选）</span>
                 <input
                   value={keyword}
                   disabled={busy !== null}
@@ -234,7 +234,7 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
               </label>
               <div className="flex gap-3">
                 <button type="button" disabled={busy !== null} onClick={() => setStep(1)} className="rounded-lg border px-4 py-2">
-                  涓婁竴姝
+                  上一步
                 </button>
                 <button
                   type="button"
@@ -242,7 +242,7 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                   onClick={() => advance(3)}
                   className="rounded-lg bg-cyan-500 px-4 py-2 text-slate-950"
                 >
-                  涓嬩竴姝ワ細鎶撳彇缃戦〉
+                  下一步：抓取网页
                 </button>
               </div>
             </div>
@@ -253,22 +253,22 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
               <dl className="rounded-lg bg-slate-950 p-4 text-sm">
                 <dt className="text-slate-400">URL</dt>
                 <dd className="break-all">{url.trim()}</dd>
-                <dt className="mt-3 text-slate-400">鍏抽敭璇峘</dt>
-                <dd>{keyword.trim() || 'None'}</dd>
+                <dt className="mt-3 text-slate-400">关键词</dt>
+                <dd>{keyword.trim() || '无'}</dd>
               </dl>
               {captureInvalidated && (
                 <p role="status" className="text-amber-300">
-                  缃戝潃鎴栧叧閿瘝宸插彉鍖栵紝璇烽噸鏂版姄鍙朻
+                  输入已更改，请重新抓取网页后再进行 AI 建模。
                 </p>
               )}
               {!validUrl && (
                 <p role="alert" className="text-sm text-rose-300">
-                  璇疯緭鍏ユ湁鏁堢殑 HTTP(S) 缃戝潃
+                  请输入有效的 HTTP(S) 网址。
                 </p>
               )}
               <div className="flex gap-3">
                 <button type="button" disabled={busy !== null} onClick={() => setStep(2)} className="rounded-lg border px-4 py-2">
-                  涓婁竴姝
+                  上一步
                 </button>
                 <button
                   type="button"
@@ -276,7 +276,7 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                   onClick={capturePage}
                   className="rounded-lg bg-cyan-500 px-4 py-2 text-slate-950 disabled:opacity-40"
                 >
-                  {busy === 'capture' ? '姝ｅ湪鎵撳紑骞舵姄鍙?..' : '鎵撳紑骞舵姄鍙栫綉椤礰'}
+                  {busy === 'capture' ? '正在打开并抓取…' : '打开并抓取网页'}
                 </button>
               </div>
             </div>
@@ -285,7 +285,7 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
           {step === 4 && (
             <div className="space-y-5">
               <label className="block">
-                <span className="mb-2 block">闇€姹傛鏂嘸</span>
+                <span className="mb-2 block">需求正文</span>
                 <textarea
                   rows={10}
                   value={docText}
@@ -302,14 +302,14 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                 onClick={generateDraft}
                 className="rounded-lg bg-violet-400 px-4 py-2 text-slate-950 disabled:opacity-40"
               >
-                {busy === 'generate' ? 'AI 姝ｅ湪寤烘ā...' : 'AI 瑙ｆ瀽闇€姹傚苟寤烘ā'}
+                {busy === 'generate' ? 'AI 正在解析需求并建模…' : 'AI 解析需求并建模'}
               </button>
 
               {draft && (
                 <fieldset className="space-y-4 rounded-xl border border-slate-700 p-4">
-                  <legend className="px-2 font-semibold">妯℃澘鑽夌</legend>
+                  <legend className="px-2 font-semibold">模板草稿</legend>
                   <label className="block">
-                    <span className="mb-1 block text-sm">妯℃澘鍚嶇О</span>
+                    <span className="mb-1 block text-sm">模板名称</span>
                     <input
                       value={draft.name}
                       onChange={event => updateDraft({ name: event.target.value })}
@@ -317,7 +317,7 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                     />
                   </label>
                   <label className="block">
-                    <span className="mb-1 block text-sm">妯℃澘鎻忚堪</span>
+                    <span className="mb-1 block text-sm">模板说明</span>
                     <textarea
                       value={draft.description}
                       onChange={event => updateDraft({ description: event.target.value })}
@@ -325,11 +325,11 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                     />
                   </label>
                   <div>
-                    <p className="mb-2 text-sm">姝ラ</p>
+                    <p className="mb-2 text-sm">步骤</p>
                     {draft.steps.map((draftStep, index) => (
                       <input
                         key={`${draftStep.order}-${index}`}
-                        aria-label={`姝ラ ${index + 1}`}
+                        aria-label={`步骤 ${index + 1}`}
                         value={draftStep.description}
                         onChange={event =>
                           updateDraft({
@@ -345,11 +345,11 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                     ))}
                   </div>
                   <div>
-                    <p className="mb-2 text-sm">鍙橀噺</p>
+                    <p className="mb-2 text-sm">变量</p>
                     {draft.variables.map((variable, index) => (
                       <input
                         key={`${variable.name}-${index}`}
-                        aria-label={`鍙橀噺 ${index + 1}`}
+                        aria-label={`变量 ${index + 1}`}
                         value={variable.name}
                         onChange={event =>
                           updateDraft({
@@ -363,7 +363,7 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                     ))}
                   </div>
                   <label className="block">
-                    <span className="mb-1 block text-sm">鏍囩锛堥€楀彿鍒嗛殧锛?</span>
+                    <span className="mb-1 block text-sm">标签（以英文逗号分隔）</span>
                     <input
                       value={draft.tags.join(', ')}
                       onChange={event =>
@@ -383,13 +383,13 @@ export function RequirementModeler({ onCancel, onSaved }: RequirementModelerProp
                     onClick={saveDraft}
                     className="rounded-lg bg-emerald-400 px-4 py-2 text-slate-950 disabled:opacity-40"
                   >
-                    {busy === 'save' ? '姝ｅ湪淇濆瓨...' : '淇濆瓨妯℃澘骞惰繑鍥瀈'}
+                    {busy === 'save' ? '正在保存…' : '保存模板并返回'}
                   </button>
                 </fieldset>
               )}
 
               <button type="button" disabled={busy !== null} onClick={() => setStep(3)} className="rounded-lg border px-4 py-2">
-                涓婁竴姝
+                上一步
               </button>
             </div>
           )}

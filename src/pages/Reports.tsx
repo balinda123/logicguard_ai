@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import {
   BarChart3,
   Clock,
@@ -60,7 +60,9 @@ export const Reports: React.FC = () => {
     const matchesSearch =
       r.testName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       r.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      r.task.toLowerCase().includes(searchTerm.toLowerCase());
+      r.task.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r.suiteName ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r.caseName ?? '').toLowerCase().includes(searchTerm.toLowerCase());
 
     const matchesStatus =
       statusFilter === "all" ||
@@ -113,7 +115,7 @@ export const Reports: React.FC = () => {
       stepsTotal: 6,
       stepsSuccess:
         randomStatus === "success" ? 6 : Math.floor(2 + Math.random() * 3),
-      reportMarkdown: `### 📊 模拟导出运行诊断报告 (${newId})\n\n- **执行意图**：展开绩效期间选择器，选中对应年份，点击“导出”按钮，校验下载状态。\n- **状态判定**：${randomStatus === "success" ? "✅ 执行通过，接口拦截到报表文件导出成功" : "❌ 任务失败，点击导出按钮时接口发生 500 服务器内部故障"}\n- **Healer自愈追踪**：${isHealed ? "🚑 **成功自愈 1 次**。检测到选项失焦折叠，Healer 启动智能按键流（ArrowDown + Enter）成功补救。" : "未触发重大故障干预。"}\n\n#### 📝 实时交互日志：\n1. \`click_period_select_combobox\` -> 展开“选择绩效期间”下拉框成功。\n2. \`select_target_year_option\` -> ${isHealed ? "检测到失焦收回，Healer 自愈引擎调用 ArrowDown 补救，成功选中目标年份！" : "在 teleport 浮层中精准点击目标年份，选中成功。"}\n3. \`verify_active_year_text\` -> 页面断言“当前选定期间”已刷新符合预期。\n4. \`click_export_report_button\` -> 精准点击“导出”按钮。\n5. \`intercept_api_export_response\` -> ${randomStatus === "success" ? "通过拦截接口取得流数据，导出状态码: 200 SUCCESS" : "🔴 拦截到服务端报错: 500 Internal Server Error，重试 3 次后依旧无法连接，已自动限流中止任务。"}`,
+      reportMarkdown: `### 📊 模拟导出运行诊断报告 (${newId})\n\n- **执行意图**：展开绩效期间选择器，选中对应年份，点击“导出”按钮，校验下载状态。\n- **状态判定**：${randomStatus === "success" ? "✅ 执行通过，接口拦截到报表文件导出成功" : "❌ 任务失败，点击导出按钮时接口发生 500 服务器内部故障"}\n- **Healer自愈追踪**：${isHealed ? "🚑 **成功自愈 1 次**。检测到选项失焦折叠，Healer 启动智能按键流（ArrowDown + Enter）成功补救。" : "未触发重大故障干预。"}\n\n#### 📝 实时交互日志：\n1. \`click_period_select_combobox\` -> 展开“选择绩效期间”下拉框成功。\n2. \`select_target_year_option\` -> ${isHealed ? "检测到失焦收回，Healer 自愈引擎调用 ArrowDown 补救，成功选中目标年份！" : "在 teleport 浮层中精准点击目标年份，选中成功。"}\n3. \`verify_active_year_text\` -> 页面断言“当前选定期间”已刷新符合预期。\n4. \`click_export_report_button\` -> 精准点击“导出”按钮。\n5. \`intercept_api_export_response\` -> ${randomStatus === "success" ? "通过拦截接口取得流数据，导出状态码：200，导出成功。" : "🔴 拦截到服务端报错：500 服务器内部错误，重试 3 次后依旧无法连接，已自动限流中止任务。"}`,
       duration: 45,
     };
 
@@ -364,7 +366,7 @@ export const Reports: React.FC = () => {
                               : "bg-error/15 text-error"
                           }`}
                         >
-                          {r.testStatus === "success" ? "PASSED" : "FAILED"}
+                          {r.testStatus === "success" ? "???" : "??"}
                         </span>
                         <button
                           onClick={(e) => {
@@ -426,7 +428,7 @@ export const Reports: React.FC = () => {
                     : "bg-error/15 text-error"
                 }`}
               >
-                {selectedReport.testStatus === "success" ? "PASSED" : "FAILED"}
+                {selectedReport.testStatus === "success" ? "???" : "??"}
               </span>
             </div>
           </div>
@@ -441,6 +443,29 @@ export const Reports: React.FC = () => {
               <p className="text-xs text-text-secondary leading-relaxed bg-surface-1 p-3.5 rounded border border-border/80 font-medium">
                 🔍 执行目标: "{selectedReport.task}"
               </p>
+
+              {(selectedReport.managementSummary || selectedReport.suiteName || selectedReport.caseName) && (
+                <div className="rounded-xl border border-brand-500/20 bg-brand-500/5 p-4 space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-bold text-text-primary">
+                    <FileCheck className="w-4 h-4 text-brand-400" />
+                    部门管理摘要
+                  </div>
+                  <p className="text-xs text-text-secondary leading-relaxed">
+                    {selectedReport.managementSummary || '该报告来自测试用例/回归套件执行。'}
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+                    <span className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-text-muted">
+                      套件：{selectedReport.suiteName || '未归属套件'}
+                    </span>
+                    <span className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-text-muted">
+                      用例：{selectedReport.caseName || selectedReport.testName}
+                    </span>
+                    <span className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-text-muted">
+                      发版建议：{selectedReport.releaseAdvice === 'block_release' ? '阻断发版' : selectedReport.releaseAdvice === 'review_required' ? '人工复核' : '可继续'}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Progress chart */}
               <div className="space-y-2 pt-1">

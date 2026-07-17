@@ -72,14 +72,14 @@ function deferred<T>() {
 async function reachCapture(keyword = 'checkout') {
   const user = userEvent.setup()
   await user.type(
-    screen.getByLabelText('闇€姹傛枃妗ｇ綉鍧€'),
+    screen.getByLabelText('需求文档网址'),
     ' https://example.com/requirements ',
   )
-  await user.click(screen.getByRole('button', { name: '涓嬩竴姝ワ細璁剧疆鍏抽敭璇峘' }))
+  await user.click(screen.getByRole('button', { name: '下一步：设置关键词' }))
   if (keyword) {
-    await user.type(screen.getByLabelText('鍏抽敭璇嶈繃婊わ紙鍙€夛級'), keyword)
+    await user.type(screen.getByLabelText('关键词过滤（可选）'), keyword)
   }
-  await user.click(screen.getByRole('button', { name: '涓嬩竴姝ワ細鎶撳彇缃戦〉' }))
+  await user.click(screen.getByRole('button', { name: '下一步：抓取网页' }))
   return user
 }
 
@@ -97,23 +97,23 @@ describe('RequirementModeler', () => {
     const user = userEvent.setup()
     render(<RequirementModeler onCancel={vi.fn()} onSaved={vi.fn()} />)
 
-    const next = screen.getByRole('button', { name: '涓嬩竴姝ワ細璁剧疆鍏抽敭璇峘' })
+    const next = screen.getByRole('button', { name: '下一步：设置关键词' })
     expect(next).toBeDisabled()
 
-    await user.type(screen.getByLabelText('闇€姹傛枃妗ｇ綉鍧€'), 'example.com')
+    await user.type(screen.getByLabelText('需求文档网址'), 'example.com')
     await user.tab()
 
     expect(next).toBeDisabled()
-    expect(screen.getByRole('alert')).toHaveTextContent('HTTP')
+    expect(screen.getByRole('alert')).toHaveTextContent('请输入有效的 HTTP(S) 网址')
   })
 
   it('captures after navigation, passes the keyword, and preserves values while going back', async () => {
     render(<RequirementModeler onCancel={vi.fn()} onSaved={vi.fn()} />)
     const user = await reachCapture()
 
-    await user.click(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' }))
+    await user.click(screen.getByRole('button', { name: '打开并抓取网页' }))
 
-    expect(await screen.findByLabelText('闇€姹傛鏂嘸')).toHaveValue(
+    expect(await screen.findByLabelText('需求正文')).toHaveValue(
       'Captured requirement text',
     )
     expect(navigateMock).toHaveBeenCalledWith('https://example.com/requirements')
@@ -122,12 +122,12 @@ describe('RequirementModeler', () => {
       contentMock.mock.invocationCallOrder[0],
     )
 
-    await user.click(screen.getByRole('button', { name: '涓婁竴姝' }))
-    expect(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' })).toBeEnabled()
-    await user.click(screen.getByRole('button', { name: '涓婁竴姝' }))
-    expect(screen.getByLabelText('鍏抽敭璇嶈繃婊わ紙鍙€夛級')).toHaveValue('checkout')
-    await user.click(screen.getByRole('button', { name: '涓婁竴姝' }))
-    expect(screen.getByLabelText('闇€姹傛枃妗ｇ綉鍧€')).toHaveValue(
+    await user.click(screen.getByRole('button', { name: '上一步' }))
+    expect(screen.getByRole('button', { name: '打开并抓取网页' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: '上一步' }))
+    expect(screen.getByLabelText('关键词过滤（可选）')).toHaveValue('checkout')
+    await user.click(screen.getByRole('button', { name: '上一步' }))
+    expect(screen.getByLabelText('需求文档网址')).toHaveValue(
       ' https://example.com/requirements ',
     )
   })
@@ -140,28 +140,28 @@ describe('RequirementModeler', () => {
     render(<RequirementModeler onCancel={vi.fn()} onSaved={vi.fn()} />)
     const user = await reachCapture()
 
-    await user.click(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' }))
+    await user.click(screen.getByRole('button', { name: '打开并抓取网页' }))
 
     expect(await screen.findByRole('alert')).toBeVisible()
-    expect(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' })).toBeEnabled()
-    expect(screen.queryByLabelText('闇€姹傛鏂嘸')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '打开并抓取网页' })).toBeEnabled()
+    expect(screen.queryByLabelText('需求正文')).not.toBeInTheDocument()
     expect(
-      screen.queryByRole('button', { name: 'AI 瑙ｆ瀽闇€姹傚苟寤烘ā' }),
+      screen.queryByRole('button', { name: 'AI 解析需求并建模' }),
     ).not.toBeInTheDocument()
   })
 
   it('locks AI modeling when a repeat capture returns empty content', async () => {
     render(<RequirementModeler onCancel={vi.fn()} onSaved={vi.fn()} />)
     const user = await reachCapture()
-    await user.click(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' }))
-    await screen.findByLabelText('闇€姹傛鏂嘸')
-    await user.click(screen.getByRole('button', { name: '涓婁竴姝' }))
+    await user.click(screen.getByRole('button', { name: '打开并抓取网页' }))
+    await screen.findByLabelText('需求正文')
+    await user.click(screen.getByRole('button', { name: '上一步' }))
     contentMock.mockResolvedValue(pageContent(''))
 
-    await user.click(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' }))
+    await user.click(screen.getByRole('button', { name: '打开并抓取网页' }))
 
     expect(await screen.findByRole('alert')).toBeVisible()
-    expect(screen.getByRole('button', { name: /4\.\s*AI 寤烘ā/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /4\.\s*AI 建模/ })).toBeDisabled()
   })
 
   it('locks navigation while capture is pending so stale results cannot commit to changed inputs', async () => {
@@ -170,15 +170,15 @@ describe('RequirementModeler', () => {
     render(<RequirementModeler onCancel={vi.fn()} onSaved={vi.fn()} />)
     const user = await reachCapture()
 
-    await user.click(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' }))
+    await user.click(screen.getByRole('button', { name: '打开并抓取网页' }))
 
-    expect(screen.getByRole('button', { name: /1\.\s*杈撳叆缃戝潃/ })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /2\.\s*璁剧疆鍏抽敭璇峘/ })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '涓婁竴姝' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /姝ｅ湪鎵撳紑骞舵姄鍙?/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /1\.\s*输入网址/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /2\.\s*设置关键词/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '上一步' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /正在打开并抓取/ })).toBeDisabled()
 
     navigation.resolve({ action: 'navigate', message: 'ok' })
-    expect(await screen.findByLabelText('闇€姹傛鏂嘸')).toHaveValue(
+    expect(await screen.findByLabelText('需求正文')).toHaveValue(
       'Captured requirement text',
     )
   })
@@ -186,23 +186,23 @@ describe('RequirementModeler', () => {
   it('disables capture and exposes URL validation when an invalidated URL is invalid', async () => {
     render(<RequirementModeler onCancel={vi.fn()} onSaved={vi.fn()} />)
     const user = await reachCapture()
-    await user.click(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' }))
-    await screen.findByLabelText('闇€姹傛鏂嘸')
-    await user.click(screen.getByRole('button', { name: /1\.\s*杈撳叆缃戝潃/ }))
-    const urlInput = screen.getByLabelText('闇€姹傛枃妗ｇ綉鍧€')
+    await user.click(screen.getByRole('button', { name: '打开并抓取网页' }))
+    await screen.findByLabelText('需求正文')
+    await user.click(screen.getByRole('button', { name: /1\.\s*输入网址/ }))
+    const urlInput = screen.getByLabelText('需求文档网址')
     await user.clear(urlInput)
     await user.type(urlInput, 'not-a-url')
-    await user.click(screen.getByRole('button', { name: /3\.\s*鎶撳彇缃戦〉/ }))
+    await user.click(screen.getByRole('button', { name: /3\.\s*抓取网页/ }))
 
-    expect(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' })).toBeDisabled()
-    expect(screen.getByRole('alert')).toHaveTextContent('HTTP')
+    expect(screen.getByRole('button', { name: '打开并抓取网页' })).toBeDisabled()
+    expect(screen.getByRole('alert')).toHaveTextContent('请输入有效的 HTTP(S) 网址')
   })
 
   it('cancels from the always-visible return action', async () => {
     const onCancel = vi.fn()
     render(<RequirementModeler onCancel={onCancel} onSaved={vi.fn()} />)
 
-    await userEvent.click(screen.getByRole('button', { name: '杩斿洖娴嬭瘯璁捐' }))
+    await userEvent.click(screen.getByRole('button', { name: '返回测试设计' }))
 
     expect(onCancel).toHaveBeenCalledOnce()
   })
@@ -211,12 +211,12 @@ describe('RequirementModeler', () => {
     const onSaved = vi.fn()
     render(<RequirementModeler onCancel={vi.fn()} onSaved={onSaved} />)
     const user = await reachCapture()
-    await user.click(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' }))
+    await user.click(screen.getByRole('button', { name: '打开并抓取网页' }))
 
-    const documentInput = await screen.findByLabelText('闇€姹傛鏂嘸')
+    const documentInput = await screen.findByLabelText('需求正文')
     await user.clear(documentInput)
     await user.type(documentInput, 'Edited current requirement')
-    await user.click(screen.getByRole('button', { name: 'AI 瑙ｆ瀽闇€姹傚苟寤烘ā' }))
+    await user.click(screen.getByRole('button', { name: 'AI 解析需求并建模' }))
 
     expect(generateMock).toHaveBeenCalledWith(
       'Edited current requirement',
@@ -227,7 +227,7 @@ describe('RequirementModeler', () => {
     )
     expect(await screen.findByDisplayValue('Generated flow')).toBeVisible()
 
-    await user.click(screen.getByRole('button', { name: '淇濆瓨妯℃澘骞惰繑鍥瀈' }))
+    await user.click(screen.getByRole('button', { name: '保存模板并返回' }))
 
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(generatedTemplate))
     expect(saveMock).toHaveBeenCalledWith(generatedTemplate)
@@ -242,14 +242,14 @@ describe('RequirementModeler', () => {
       .mockResolvedValueOnce(generatedTemplate)
     render(<RequirementModeler onCancel={vi.fn()} onSaved={vi.fn()} />)
     const user = await reachCapture()
-    await user.click(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' }))
-    const documentInput = await screen.findByLabelText('闇€姹傛鏂嘸')
+    await user.click(screen.getByRole('button', { name: '打开并抓取网页' }))
+    const documentInput = await screen.findByLabelText('需求正文')
 
-    await user.click(screen.getByRole('button', { name: 'AI 瑙ｆ瀽闇€姹傚苟寤烘ā' }))
+    await user.click(screen.getByRole('button', { name: 'AI 解析需求并建模' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('model unavailable')
     expect(documentInput).toHaveValue('Captured requirement text')
-    const generate = screen.getByRole('button', { name: 'AI 瑙ｆ瀽闇€姹傚苟寤烘ā' })
+    const generate = screen.getByRole('button', { name: 'AI 解析需求并建模' })
     expect(generate).toBeEnabled()
     await user.click(generate)
     expect(await screen.findByDisplayValue('Generated flow')).toBeVisible()
@@ -263,14 +263,14 @@ describe('RequirementModeler', () => {
     })
     render(<RequirementModeler onCancel={vi.fn()} onSaved={onSaved} />)
     const user = await reachCapture()
-    await user.click(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' }))
-    await screen.findByLabelText('闇€姹傛鏂嘸')
-    await user.click(screen.getByRole('button', { name: 'AI 瑙ｆ瀽闇€姹傚苟寤烘ā' }))
+    await user.click(screen.getByRole('button', { name: '打开并抓取网页' }))
+    await screen.findByLabelText('需求正文')
+    await user.click(screen.getByRole('button', { name: 'AI 解析需求并建模' }))
     const nameInput = await screen.findByDisplayValue('Generated flow')
     await user.clear(nameInput)
     await user.type(nameInput, 'Edited generated flow')
 
-    await user.click(screen.getByRole('button', { name: '淇濆瓨妯℃澘骞惰繑鍥瀈' }))
+    await user.click(screen.getByRole('button', { name: '保存模板并返回' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('disk full')
     expect(screen.getByDisplayValue('Edited generated flow')).toBeVisible()
@@ -283,16 +283,16 @@ describe('RequirementModeler', () => {
   it('invalidates captured content when the keyword changes and requires recapture', async () => {
     render(<RequirementModeler onCancel={vi.fn()} onSaved={vi.fn()} />)
     const user = await reachCapture()
-    await user.click(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' }))
-    await screen.findByLabelText('闇€姹傛鏂嘸')
+    await user.click(screen.getByRole('button', { name: '打开并抓取网页' }))
+    await screen.findByLabelText('需求正文')
 
-    await user.click(screen.getByRole('button', { name: '涓婁竴姝' }))
-    await user.click(screen.getByRole('button', { name: '涓婁竴姝' }))
-    await user.type(screen.getByLabelText('鍏抽敭璇嶈繃婊わ紙鍙€夛級'), ' changed')
-    await user.click(screen.getByRole('button', { name: '涓嬩竴姝ワ細鎶撳彇缃戦〉' }))
+    await user.click(screen.getByRole('button', { name: '上一步' }))
+    await user.click(screen.getByRole('button', { name: '上一步' }))
+    await user.type(screen.getByLabelText('关键词过滤（可选）'), ' changed')
+    await user.click(screen.getByRole('button', { name: '下一步：抓取网页' }))
 
-    expect(screen.getByText('缃戝潃鎴栧叧閿瘝宸插彉鍖栵紝璇烽噸鏂版姄鍙朻')).toBeVisible()
-    expect(screen.getByRole('button', { name: '鎵撳紑骞舵姄鍙栫綉椤礰' })).toBeEnabled()
-    expect(screen.queryByLabelText('闇€姹傛鏂嘸')).not.toBeInTheDocument()
+    expect(screen.getByText('输入已更改，请重新抓取网页后再进行 AI 建模。')).toBeVisible()
+    expect(screen.getByRole('button', { name: '打开并抓取网页' })).toBeEnabled()
+    expect(screen.queryByLabelText('需求正文')).not.toBeInTheDocument()
   })
 })

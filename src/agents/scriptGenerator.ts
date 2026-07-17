@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getLlmConfig } from '../api/llmBridge';
 import { getPageSnapshot } from '../api/browserBridge';
 import type { TestScript, TestStep } from '../types';
+import { sanitizeForLlm } from '../utils/privacy';
 
 export interface GenerateScriptOptions {
   onProgress?: (msg: string) => void;
@@ -42,8 +43,8 @@ export async function generateTestScript(
   onProgress?.('🤖 AI 正在分析需求，生成测试脚本...');
 
   const raw = await invoke<string>('generate_test_script', {
-    userIntent,
-    domSnapshot,
+    userIntent: sanitizeForLlm(userIntent),
+    domSnapshot: sanitizeForLlm(domSnapshot),
     pageUrl,
     config,
   });

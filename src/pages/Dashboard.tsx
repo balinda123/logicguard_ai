@@ -24,6 +24,7 @@ import type { StagehandStep } from "../agents/stagehandExecutor";
 import { TaskExecutionConsole } from "../components/TaskExecutionConsole";
 import type { ConsoleStep } from "../components/TaskExecutionConsole";
 import { scopedStorageKey } from "../api/auth";
+import { maskSensitiveText, sanitizeForLlm } from "../utils/privacy";
 
 export const Dashboard: React.FC = () => {
   const [taskInput, setTaskInput] = useState("");
@@ -453,7 +454,7 @@ export const Dashboard: React.FC = () => {
       });
 
       await invoke("browser_run_agent", {
-        instruction: taskInput,
+        instruction: sanitizeForLlm(taskInput),
         port: getCdpPort(),
         config,
       });
@@ -480,7 +481,7 @@ export const Dashboard: React.FC = () => {
           }));
           const successCount = updatedSteps.length;
           const formattedLogs =
-            `### 🤖 Stagehand 原生闭环 Agent 执行报告\n\n- **执行目标**: ${taskInput}\n- **状态**: ✅ 所有任务已成功完成！\n\n#### 📝 分步轨迹:\n` +
+            `### 🤖 Stagehand 原生闭环 Agent 执行报告\n\n- **执行目标**: ${maskSensitiveText(taskInput)}\n- **状态**: ✅ 所有任务已成功完成！\n\n#### 📝 分步轨迹:\n` +
             updatedSteps
               .map(
                 (s, i) =>
@@ -494,7 +495,7 @@ export const Dashboard: React.FC = () => {
 
           saveReport(
             "Stagehand 闭环自主 Agent 任务",
-            taskInput,
+            maskSensitiveText(taskInput),
             "success",
             updatedSteps.length || 1,
             successCount || 1,
@@ -534,7 +535,7 @@ export const Dashboard: React.FC = () => {
             (s) => s.status === "success",
           ).length;
           const formattedLogs =
-            `### 🔴 Stagehand 原生闭环 Agent 异常报告\n\n- **执行目标**: ${taskInput}\n- **状态**: ❌ 执行失败: ${errMsg}\n\n#### 📝 分步轨迹:\n` +
+            `### 🔴 Stagehand 原生闭环 Agent 异常报告\n\n- **执行目标**: ${maskSensitiveText(taskInput)}\n- **状态**: ❌ 执行失败: ${maskSensitiveText(errMsg)}\n\n#### 📝 分步轨迹:\n` +
             updatedSteps
               .map(
                 (s, i) =>
@@ -548,7 +549,7 @@ export const Dashboard: React.FC = () => {
 
           saveReport(
             "Stagehand 闭环自主 Agent 任务",
-            taskInput,
+            maskSensitiveText(taskInput),
             "failed",
             updatedSteps.length || 1,
             successCount,

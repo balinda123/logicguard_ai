@@ -4,6 +4,7 @@ export interface SessionUser {
   id: string;
   username: string;
   role: 'admin' | 'user';
+  disabled?: boolean;
 }
 
 export interface AuthStatus {

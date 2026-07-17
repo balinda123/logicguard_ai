@@ -1,12 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { PlanStep, GeneratorOutput, HealerLog } from '../types';
+import { sanitizeForLlm } from '../utils/privacy';
 
 // =============================================
 // LLM Configuration (stored in app state)
 // =============================================
 
 export interface LlmConfig {
-  provider: 'gemini' | 'openai_compat';
+  provider: 'gemini' | 'openai_compat' | 'ollama';
   api_key?: string;
   base_url?: string;
   model: string;
@@ -55,14 +56,32 @@ export function isConfigured(): boolean {
 // Test LLM Connection
 // =============================================
 
+function localizeLlmMessage(message: string): string {
+  const normalized = message.trim();
+  const lower = normalized.toLowerCase();
+  if (lower === 'llm connection successful' || lower === 'connection successful') {
+    return '模型连接成功';
+  }
+  if (lower.includes('api key') && lower.includes('missing')) {
+    return '缺少 API Key，请先在系统设置中保存密钥';
+  }
+  if (lower.includes('base_url not configured')) {
+    return '缺少 API Base URL，请在系统设置中填写接口地址';
+  }
+  if (lower.includes('unknown llm provider')) {
+    return '未知的模型提供商，请重新选择模型预设';
+  }
+  return normalized;
+}
+
 export async function testLlmConnection(config?: LlmConfig): Promise<{ ok: boolean; message: string }> {
   const cfg = config ?? getLlmConfig();
   try {
     const raw = await invoke<string>('test_llm_connection', { config: cfg });
     const parsed = JSON.parse(raw);
-    return { ok: parsed.status === 'ok', message: parsed.message ?? raw };
+    return { ok: parsed.status === 'ok', message: localizeLlmMessage(parsed.message ?? raw) };
   } catch (e) {
-    return { ok: false, message: String(e) };
+    return { ok: false, message: localizeLlmMessage(String(e)) };
   }
 }
 
@@ -89,8 +108,8 @@ export async function planTask(
   let raw: string;
   try {
     raw = await invoke<string>('plan_task', {
-      userIntent,
-      context,
+      userIntent: sanitizeForLlm(userIntent),
+      context: sanitizeForLlm(context),
       config,
     });
   } catch (e) {
@@ -169,8 +188,8 @@ export async function generateAction(
   const config = getLlmConfig();
 
   const raw = await invoke<string>('generate_action', {
-    stepDescription,
-    domContext,
+    stepDescription: sanitizeForLlm(stepDescription),
+    domContext: sanitizeForLlm(domContext),
     config,
   });
 
@@ -199,9 +218,9 @@ export async function healStep(
   const config = getLlmConfig();
 
   const raw = await invoke<string>('heal_step', {
-    stepDescription,
-    failureReason,
-    domContext,
+    stepDescription: sanitizeForLlm(stepDescription),
+    failureReason: sanitizeForLlm(failureReason),
+    domContext: sanitizeForLlm(domContext),
     config,
   });
 

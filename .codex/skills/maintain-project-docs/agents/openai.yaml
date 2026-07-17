@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintain Project Docs"
+  short_description: "Keep project documentation aligned with every code change"
+  default_prompt: "Use $maintain-project-docs to update code and synchronize all affected project documentation."

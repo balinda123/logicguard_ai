@@ -16,6 +16,7 @@ pub struct SessionUser {
     pub id: String,
     pub username: String,
     pub role: String,
+    pub disabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -88,7 +89,7 @@ pub fn initialize_admin(app: tauri::AppHandle, username: String, password: Strin
     let conn = open_db(&app)?;
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0)).map_err(|e| e.to_string())?;
     if count > 0 { return Err("管理员已经初始化".to_string()); }
-    let user = SessionUser { id: Uuid::new_v4().to_string(), username: username.trim().to_string(), role: "admin".to_string() };
+    let user = SessionUser { id: Uuid::new_v4().to_string(), username: username.trim().to_string(), role: "admin".to_string(), disabled: false };
     if user.username.len() < 3 { return Err("用户名至少需要 3 个字符".to_string()); }
     let hash = hash_password(&password)?;
     conn.execute("INSERT INTO users(id,username,password_hash,role) VALUES(?1,?2,?3,'admin')", params![user.id, user.username, hash]).map_err(|e| e.to_string())?;
@@ -107,7 +108,7 @@ pub fn login(app: tauri::AppHandle, username: String, password: String) -> Resul
     if disabled != 0 { return Err("该账号已被禁用".to_string()); }
     let parsed = PasswordHash::new(&hash).map_err(|_| "密码数据损坏".to_string())?;
     Argon2::default().verify_password(password.as_bytes(), &parsed).map_err(|_| "用户名或密码错误".to_string())?;
-    let user = SessionUser { id, username, role };
+    let user = SessionUser { id, username, role, disabled: false };
     *session().lock().map_err(|_| "会话锁异常".to_string())? = Some(user.clone());
     Ok(user)
 }
@@ -122,8 +123,8 @@ pub fn logout() -> Result<(), String> {
 pub fn list_users(app: tauri::AppHandle) -> Result<Vec<SessionUser>, String> {
     require_admin()?;
     let conn = open_db(&app)?;
-    let mut stmt = conn.prepare("SELECT id,username,role FROM users WHERE disabled=0 ORDER BY username").map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |r| Ok(SessionUser { id:r.get(0)?, username:r.get(1)?, role:r.get(2)? })).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id,username,role,disabled FROM users ORDER BY disabled, role, username").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| Ok(SessionUser { id:r.get(0)?, username:r.get(1)?, role:r.get(2)?, disabled: r.get::<_, i64>(3)? != 0 })).map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())
 }
 
@@ -131,7 +132,7 @@ pub fn list_users(app: tauri::AppHandle) -> Result<Vec<SessionUser>, String> {
 pub fn create_user(app: tauri::AppHandle, username: String, password: String) -> Result<SessionUser, String> {
     require_admin()?;
     if username.trim().len() < 3 { return Err("用户名至少需要 3 个字符".to_string()); }
-    let user = SessionUser { id:Uuid::new_v4().to_string(), username:username.trim().to_string(), role:"user".to_string() };
+    let user = SessionUser { id:Uuid::new_v4().to_string(), username:username.trim().to_string(), role:"user".to_string(), disabled: false };
     let hash = hash_password(&password)?;
     open_db(&app)?.execute("INSERT INTO users(id,username,password_hash,role) VALUES(?1,?2,?3,'user')", params![user.id,user.username,hash]).map_err(|e| e.to_string())?;
     Ok(user)
