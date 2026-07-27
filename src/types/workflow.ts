@@ -59,6 +59,7 @@ export interface TestAccount {
   role: BusinessRole
   displayName: string
   maskedLoginName: string
+  credentialRef: string
   loginMode: LoginMode
   enabled: boolean
   loginConfig: LoginAutomationConfig

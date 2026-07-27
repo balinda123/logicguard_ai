@@ -89,6 +89,7 @@ describe('workflow domain rules', () => {
       role: 'employee',
       displayName: 'Test employee',
       maskedLoginName: 'empl***@example.test',
+      credentialRef: 'test-account-employee-001',
       loginMode: 'automatic',
       enabled: true,
       loginConfig: {
@@ -101,6 +102,13 @@ describe('workflow domain rules', () => {
       createdAt: '2026-07-27T00:00:00.000Z',
       updatedAt: '2026-07-27T00:00:00.000Z',
     } satisfies TestAccount
+
+    const { credentialRef: ignoredCredentialRef, ...automaticAccountWithoutCredentialRef } = account
+    // @ts-expect-error Automatic login accounts must retain a keyring lookup reference.
+    const invalidAutomaticAccount: TestAccount = automaticAccountWithoutCredentialRef
+
+    expect(ignoredCredentialRef).toBe('test-account-employee-001')
+    expect(invalidAutomaticAccount.loginMode).toBe('automatic')
 
     const combination = {
       id: 'combination_1',
@@ -170,5 +178,17 @@ describe('workflow domain rules', () => {
       evidence,
       defect,
     })
+
+    const serializedAccount = JSON.parse(JSON.stringify(account))
+    expect(serializedAccount).toMatchObject({
+      credentialRef: 'test-account-employee-001',
+      maskedLoginName: 'empl***@example.test',
+      loginConfig: account.loginConfig,
+    })
+    expect(serializedAccount).not.toHaveProperty('loginName')
+    expect(serializedAccount).not.toHaveProperty('password')
+    expect(serializedAccount).not.toHaveProperty('otp')
+    expect(serializedAccount).not.toHaveProperty('accessToken')
+    expect(serializedAccount).not.toHaveProperty('secret')
   })
 })
