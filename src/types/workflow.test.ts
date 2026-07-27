@@ -5,6 +5,7 @@ import {
   isRunTerminal,
   transitionDefectStatus,
   type AccountCombination,
+  type DefectStatus,
   type DefectDraft,
   type FailureEvidence,
   type TestAccount,
@@ -46,6 +47,15 @@ describe('workflow domain rules', () => {
     expect(transitionDefectStatus('pending_validation', 'not_a_bug')).toBe(false)
     expect(transitionDefectStatus('closed', 'pending_fix')).toBe(false)
     expect(transitionDefectStatus('not_a_bug', 'pending_fix')).toBe(false)
+  })
+
+  it('rejects unknown defect statuses without throwing', () => {
+    const unknownStatus = 'unknown_status' as DefectStatus
+
+    expect(() => transitionDefectStatus(unknownStatus, 'pending_fix')).not.toThrow()
+    expect(transitionDefectStatus(unknownStatus, 'pending_fix')).toBe(false)
+    expect(() => transitionDefectStatus('pending_fix', unknownStatus)).not.toThrow()
+    expect(transitionDefectStatus('pending_fix', unknownStatus)).toBe(false)
   })
 
   it('keeps workflow records serializable and credential-free', () => {

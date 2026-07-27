@@ -149,5 +149,5 @@ export function isRunTerminal(status: RunStatus): boolean {
 }
 
 export function transitionDefectStatus(current: DefectStatus, next: DefectStatus): boolean {
-  return DEFECT_TRANSITIONS[current].includes(next)
+  return (DEFECT_TRANSITIONS[current] ?? []).includes(next)
 }
