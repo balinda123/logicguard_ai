@@ -55,6 +55,54 @@ fn create_scenario(conn: &Connection, owner_id: &str) -> String {
     .id
 }
 
+fn create_queued_run(
+    conn: &Connection,
+    owner_id: &str,
+    scenario_id: String,
+    account_combination_id: Option<String>,
+) -> testing::WorkflowRun {
+    testing::create_workflow_run_record(
+        conn,
+        owner_id,
+        &CreateWorkflowRunInput {
+            scenario_id,
+            account_combination_id,
+            status: "queued".to_string(),
+            current_step_order: 0,
+        },
+    )
+    .unwrap()
+}
+
+fn start_workflow_run(conn: &Connection, owner_id: &str, id: String) -> testing::WorkflowRun {
+    testing::update_workflow_run_record(
+        conn,
+        owner_id,
+        &UpdateWorkflowRunInput {
+            id,
+            status: "running".to_string(),
+            current_step_order: 0,
+        },
+    )
+    .unwrap()
+}
+
+fn defect_input(scenario_id: String, run_id: String) -> SaveDefectDraftInput {
+    SaveDefectDraftInput {
+        id: None,
+        scenario_id,
+        run_id,
+        evidence_id: None,
+        status: "pending_confirmation".to_string(),
+        title: "goal limit".to_string(),
+        reproduction_steps_json: "[]".to_string(),
+        expected_result: "reject 101 chars".to_string(),
+        actual_result: "accepted".to_string(),
+        impact_summary: "employee goal creation".to_string(),
+        business_role: Some("employee".to_string()),
+    }
+}
+
 #[test]
 fn creates_testing_schema_with_owner_scoped_resources() {
     let conn = connection();
@@ -322,8 +370,6 @@ fn owner_scoping_prevents_cross_owner_reads_updates_and_deletes() {
             id: run.id.clone(),
             status: "passed".to_string(),
             current_step_order: 1,
-            started_at: None,
-            finished_at: None,
         },
     )
     .is_err());
@@ -386,17 +432,8 @@ fn owner_scoping_prevents_cross_owner_reads_updates_and_deletes() {
 fn events_receive_monotonically_increasing_sequence_numbers() {
     let mut conn = connection();
     let scenario_id = create_scenario(&conn, "owner-a");
-    let run = testing::create_workflow_run_record(
-        &conn,
-        "owner-a",
-        &CreateWorkflowRunInput {
-            scenario_id,
-            account_combination_id: None,
-            status: "running".to_string(),
-            current_step_order: 0,
-        },
-    )
-    .unwrap();
+    let run = create_queued_run(&conn, "owner-a", scenario_id, None);
+    let run = start_workflow_run(&conn, "owner-a", run.id);
     let first = testing::append_workflow_run_event_record(
         &mut conn,
         "owner-a",
@@ -427,35 +464,21 @@ fn events_receive_monotonically_increasing_sequence_numbers() {
 fn status_updates_are_owner_scoped_and_validate_the_defect_lifecycle() {
     let conn = connection();
     let scenario_id = create_scenario(&conn, "owner-a");
-    let run = testing::create_workflow_run_record(
+    let run = create_queued_run(&conn, "owner-a", scenario_id.clone(), None);
+    let run = start_workflow_run(&conn, "owner-a", run.id);
+    let run = testing::update_workflow_run_record(
         &conn,
         "owner-a",
-        &CreateWorkflowRunInput {
-            scenario_id: scenario_id.clone(),
-            account_combination_id: None,
+        &UpdateWorkflowRunInput {
+            id: run.id,
             status: "business_failed".to_string(),
             current_step_order: 1,
         },
     )
     .unwrap();
-    let draft = testing::save_defect_draft_record(
-        &conn,
-        "owner-a",
-        &SaveDefectDraftInput {
-            id: None,
-            scenario_id,
-            run_id: run.id,
-            evidence_id: None,
-            status: "pending_confirmation".to_string(),
-            title: "goal limit".to_string(),
-            reproduction_steps_json: "[]".to_string(),
-            expected_result: "reject 101 chars".to_string(),
-            actual_result: "accepted".to_string(),
-            impact_summary: "employee goal creation".to_string(),
-            business_role: Some("employee".to_string()),
-        },
-    )
-    .unwrap();
+    let draft =
+        testing::save_defect_draft_record(&conn, "owner-a", &defect_input(scenario_id, run.id))
+            .unwrap();
     assert!(
         testing::update_defect_draft_status_record(&conn, "owner-a", &draft.id, "invalid").is_err()
     );
@@ -467,4 +490,330 @@ fn status_updates_are_owner_scoped_and_validate_the_defect_lifecycle() {
         testing::update_defect_draft_status_record(&conn, "owner-a", &draft.id, "pending_fix")
             .unwrap();
     assert_eq!(updated.status, "pending_fix");
+}
+
+#[test]
+fn rejects_sensitive_values_before_events_evidence_and_defects_reach_sqlite() {
+    let mut conn = connection();
+    let scenario_id = create_scenario(&conn, "owner-a");
+    let run = create_queued_run(&conn, "owner-a", scenario_id.clone(), None);
+
+    let safe_event = testing::append_workflow_run_event_record(
+        &mut conn,
+        "owner-a",
+        &AppendWorkflowRunEventInput {
+            run_id: run.id.clone(),
+            phase: "assertion".to_string(),
+            business_role: Some("employee".to_string()),
+            message: "password field display error".to_string(),
+        },
+    );
+    assert!(safe_event.is_ok());
+    assert!(testing::append_workflow_run_event_record(
+        &mut conn,
+        "owner-a",
+        &AppendWorkflowRunEventInput {
+            run_id: run.id.clone(),
+            phase: "assertion".to_string(),
+            business_role: Some("employee".to_string()),
+            message: "password=real-secret".to_string(),
+        },
+    )
+    .is_err());
+
+    for (expected_value, actual_value, screenshot_path) in [
+        ("password=real-secret", "validation failed", None),
+        ("validation failed", "Bearer abc", None),
+        (
+            "validation failed",
+            "validation failed",
+            Some("failure-evidence/password=real-secret.png"),
+        ),
+    ] {
+        assert!(testing::save_failure_evidence_record(
+            &conn,
+            "owner-a",
+            &SaveFailureEvidenceInput {
+                id: None,
+                run_id: run.id.clone(),
+                step_id: "step-1".to_string(),
+                expected_value: expected_value.to_string(),
+                actual_value: actual_value.to_string(),
+                screenshot_path: screenshot_path.map(str::to_string),
+            },
+        )
+        .is_err());
+    }
+
+    for malicious_draft in [
+        SaveDefectDraftInput {
+            title: "password=real-secret".to_string(),
+            ..defect_input(scenario_id.clone(), run.id.clone())
+        },
+        SaveDefectDraftInput {
+            reproduction_steps_json: r#"["Bearer abc"]"#.to_string(),
+            ..defect_input(scenario_id.clone(), run.id.clone())
+        },
+        SaveDefectDraftInput {
+            expected_result: "token=real-secret".to_string(),
+            ..defect_input(scenario_id.clone(), run.id.clone())
+        },
+        SaveDefectDraftInput {
+            actual_result: "Authorization: Bearer abc".to_string(),
+            ..defect_input(scenario_id.clone(), run.id.clone())
+        },
+        SaveDefectDraftInput {
+            impact_summary: "otp: real-secret".to_string(),
+            ..defect_input(scenario_id.clone(), run.id.clone())
+        },
+    ] {
+        assert!(testing::save_defect_draft_record(&conn, "owner-a", &malicious_draft).is_err());
+    }
+
+    let stored_event: String = conn
+        .query_row(
+            "SELECT group_concat(message, '|') FROM workflow_events",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .unwrap()
+        .unwrap_or_default();
+    assert!(!stored_event.contains("password=real-secret"));
+    assert!(!stored_event.contains("Bearer abc"));
+    for table in ["failure_evidence", "defect_drafts"] {
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "sensitive input must not reach {table}");
+    }
+}
+
+#[test]
+fn workflow_runs_enforce_server_owned_state_and_timestamps() {
+    let conn = connection();
+    let scenario_id = create_scenario(&conn, "owner-a");
+
+    assert!(testing::create_workflow_run_record(
+        &conn,
+        "owner-a",
+        &CreateWorkflowRunInput {
+            scenario_id: scenario_id.clone(),
+            account_combination_id: None,
+            status: "running".to_string(),
+            current_step_order: 0,
+        },
+    )
+    .is_err());
+    assert!(testing::create_workflow_run_record(
+        &conn,
+        "owner-a",
+        &CreateWorkflowRunInput {
+            scenario_id: scenario_id.clone(),
+            account_combination_id: None,
+            status: "queued".to_string(),
+            current_step_order: 1,
+        },
+    )
+    .is_err());
+    let run = create_queued_run(&conn, "owner-a", scenario_id, None);
+    assert!(run.started_at.is_none());
+    assert!(run.finished_at.is_none());
+
+    let forged_timestamps = r#"{"id":"run","status":"running","currentStepOrder":0,"startedAt":"2030-01-01T00:00:00Z","finishedAt":"2030-01-01T00:00:00Z"}"#;
+    assert!(serde_json::from_str::<UpdateWorkflowRunInput>(forged_timestamps).is_err());
+    assert!(testing::update_workflow_run_record(
+        &conn,
+        "owner-a",
+        &UpdateWorkflowRunInput {
+            id: run.id.clone(),
+            status: "passed".to_string(),
+            current_step_order: 0,
+        },
+    )
+    .is_err());
+
+    let running = start_workflow_run(&conn, "owner-a", run.id);
+    assert!(running.started_at.is_some());
+    assert!(running.finished_at.is_none());
+    let progressed = testing::update_workflow_run_record(
+        &conn,
+        "owner-a",
+        &UpdateWorkflowRunInput {
+            id: running.id.clone(),
+            status: "running".to_string(),
+            current_step_order: 1,
+        },
+    )
+    .unwrap();
+    assert!(testing::update_workflow_run_record(
+        &conn,
+        "owner-a",
+        &UpdateWorkflowRunInput {
+            id: progressed.id.clone(),
+            status: "running".to_string(),
+            current_step_order: 0,
+        },
+    )
+    .is_err());
+    let passed = testing::update_workflow_run_record(
+        &conn,
+        "owner-a",
+        &UpdateWorkflowRunInput {
+            id: progressed.id.clone(),
+            status: "passed".to_string(),
+            current_step_order: 1,
+        },
+    )
+    .unwrap();
+    assert!(passed.finished_at.is_some());
+    assert!(testing::update_workflow_run_record(
+        &conn,
+        "owner-a",
+        &UpdateWorkflowRunInput {
+            id: passed.id,
+            status: "running".to_string(),
+            current_step_order: 1,
+        },
+    )
+    .is_err());
+}
+
+#[test]
+fn defect_drafts_have_server_owned_status_lifecycle() {
+    let conn = connection();
+    let scenario_id = create_scenario(&conn, "owner-a");
+    let run = create_queued_run(&conn, "owner-a", scenario_id.clone(), None);
+    let draft = testing::save_defect_draft_record(
+        &conn,
+        "owner-a",
+        &SaveDefectDraftInput {
+            status: "closed".to_string(),
+            ..defect_input(scenario_id, run.id)
+        },
+    )
+    .unwrap();
+    assert_eq!(draft.status, "pending_confirmation");
+    assert!(testing::update_defect_draft_status_record(
+        &conn,
+        "owner-a",
+        &draft.id,
+        "pending_validation"
+    )
+    .is_err());
+    let fixing =
+        testing::update_defect_draft_status_record(&conn, "owner-a", &draft.id, "pending_fix")
+            .unwrap();
+    let validating = testing::update_defect_draft_status_record(
+        &conn,
+        "owner-a",
+        &fixing.id,
+        "pending_validation",
+    )
+    .unwrap();
+    let closed =
+        testing::update_defect_draft_status_record(&conn, "owner-a", &validating.id, "closed")
+            .unwrap();
+    assert!(testing::update_defect_draft_status_record(
+        &conn,
+        "owner-a",
+        &closed.id,
+        "pending_fix"
+    )
+    .is_err());
+}
+
+#[test]
+fn disabled_or_reassigned_accounts_invalidate_existing_combinations_for_runs() {
+    let conn = connection();
+    let employee =
+        testing::create_test_account_record(&conn, "admin", &account_input("employee")).unwrap();
+    let combination = testing::save_account_combination_record(
+        &conn,
+        "owner-a",
+        &SaveAccountCombinationInput {
+            id: None,
+            name: "employee path".to_string(),
+            employee_account_id: Some(employee.id.clone()),
+            manager_account_id: None,
+            hrbp_account_id: None,
+        },
+    )
+    .unwrap();
+    testing::disable_test_account_record(&conn, "admin", &employee.id).unwrap();
+    assert!(testing::save_account_combination_record(
+        &conn,
+        "owner-a",
+        &SaveAccountCombinationInput {
+            id: Some(combination.id.clone()),
+            name: combination.name.clone(),
+            employee_account_id: Some(employee.id.clone()),
+            manager_account_id: None,
+            hrbp_account_id: None,
+        },
+    )
+    .is_err());
+    assert!(testing::create_workflow_run_record(
+        &conn,
+        "owner-a",
+        &CreateWorkflowRunInput {
+            scenario_id: create_scenario(&conn, "owner-a"),
+            account_combination_id: Some(combination.id),
+            status: "queued".to_string(),
+            current_step_order: 0,
+        },
+    )
+    .is_err());
+
+    let active_employee =
+        testing::create_test_account_record(&conn, "admin", &account_input("employee")).unwrap();
+    let reassigned_combination = testing::save_account_combination_record(
+        &conn,
+        "owner-a",
+        &SaveAccountCombinationInput {
+            id: None,
+            name: "reassigned path".to_string(),
+            employee_account_id: Some(active_employee.id.clone()),
+            manager_account_id: None,
+            hrbp_account_id: None,
+        },
+    )
+    .unwrap();
+    let config = account_input("employee").login_config;
+    testing::update_test_account_record(
+        &conn,
+        "admin",
+        &UpdateTestAccountInput {
+            id: active_employee.id,
+            display_name: "reassigned account".to_string(),
+            business_role: "manager".to_string(),
+            login_mode: "automatic".to_string(),
+            login_config: config,
+        },
+    )
+    .unwrap();
+    assert!(testing::save_account_combination_record(
+        &conn,
+        "owner-a",
+        &SaveAccountCombinationInput {
+            id: Some(reassigned_combination.id.clone()),
+            name: reassigned_combination.name.clone(),
+            employee_account_id: reassigned_combination.employee_account_id.clone(),
+            manager_account_id: None,
+            hrbp_account_id: None,
+        },
+    )
+    .is_err());
+    assert!(testing::create_workflow_run_record(
+        &conn,
+        "owner-a",
+        &CreateWorkflowRunInput {
+            scenario_id: create_scenario(&conn, "owner-a"),
+            account_combination_id: Some(reassigned_combination.id),
+            status: "queued".to_string(),
+            current_step_order: 0,
+        },
+    )
+    .is_err());
 }

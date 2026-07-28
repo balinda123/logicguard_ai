@@ -140,7 +140,7 @@ pub struct WorkflowRun {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateWorkflowRunInput {
     pub scenario_id: String,
     pub account_combination_id: Option<String>,
@@ -149,13 +149,11 @@ pub struct CreateWorkflowRunInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateWorkflowRunInput {
     pub id: String,
     pub status: String,
     pub current_step_order: i64,
-    pub started_at: Option<String>,
-    pub finished_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -243,6 +241,73 @@ fn db_error(_: rusqlite::Error) -> String {
 fn required(value: &str, field: &str) -> Result<(), String> {
     if value.trim().is_empty() {
         return Err(format!("{field}_REQUIRED"));
+    }
+    Ok(())
+}
+
+fn has_sensitive_value_after_marker(value: &str, marker: &str) -> bool {
+    let normalized = value.to_ascii_lowercase();
+    normalized.match_indices(marker).any(|(index, _)| {
+        let before = normalized[..index].chars().next_back();
+        let after = normalized[index + marker.len()..].trim_start();
+        let marker_is_word = before
+            .map(|character| character.is_ascii_alphanumeric() || character == '_')
+            .unwrap_or(false);
+        !marker_is_word
+            && (after.starts_with('=') || after.starts_with(':'))
+            && !after[1..].trim().is_empty()
+    })
+}
+
+fn contains_sensitive_persisted_value(value: &str) -> bool {
+    [
+        "password",
+        "passwd",
+        "pwd",
+        "otp",
+        "one-time-code",
+        "token",
+        "api key",
+        "api-key",
+        "api_key",
+        "secret",
+    ]
+    .iter()
+    .any(|marker| has_sensitive_value_after_marker(value, marker))
+        || value
+            .to_ascii_lowercase()
+            .split_whitespace()
+            .any(|word| word == "bearer")
+            && value
+                .to_ascii_lowercase()
+                .split_whitespace()
+                .skip_while(|word| *word != "bearer")
+                .nth(1)
+                .is_some()
+}
+
+fn validate_persisted_text(value: &str, field: &str) -> Result<(), String> {
+    if contains_sensitive_persisted_value(value) {
+        Err(format!("SENSITIVE_{field}"))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_screenshot_path(value: &Option<String>) -> Result<(), String> {
+    let Some(path) = value else {
+        return Ok(());
+    };
+    validate_persisted_text(path, "SCREENSHOT_PATH")?;
+    if path.len() > 512
+        || !path.starts_with("failure-evidence/")
+        || path.contains("..")
+        || path.split('/').any(str::is_empty)
+        || !path.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '/' | '.' | '_' | '-')
+        })
+    {
+        return Err("INVALID_SCREENSHOT_PATH".to_string());
     }
     Ok(())
 }
@@ -888,7 +953,10 @@ fn ensure_combination_owned(
     id: &Option<String>,
 ) -> Result<(), String> {
     if let Some(id) = id {
-        get_account_combination(conn, owner_id, id).map(|_| ())
+        let combination = get_account_combination(conn, owner_id, id)?;
+        validate_account_for_role(conn, &combination.employee_account_id, "employee")?;
+        validate_account_for_role(conn, &combination.manager_account_id, "manager")?;
+        validate_account_for_role(conn, &combination.hrbp_account_id, "hrbp")
     } else {
         Ok(())
     }
@@ -896,6 +964,32 @@ fn ensure_combination_owned(
 
 fn validate_run_status(status: &str) -> Result<(), String> {
     allowed(status, RUN_STATUSES, "RUN_STATUS")
+}
+
+fn is_terminal_run_status(status: &str) -> bool {
+    matches!(
+        status,
+        "execution_blocked" | "business_failed" | "passed" | "cancelled"
+    )
+}
+
+fn allows_run_transition(current: &str, next: &str) -> bool {
+    matches!(
+        (current, next),
+        ("queued", "running" | "cancelled")
+            | (
+                "running",
+                "waiting_handoff"
+                    | "execution_blocked"
+                    | "business_failed"
+                    | "passed"
+                    | "cancelled"
+            )
+            | (
+                "waiting_handoff",
+                "running" | "execution_blocked" | "cancelled"
+            )
+    )
 }
 
 fn get_workflow_run(conn: &Connection, owner_id: &str, id: &str) -> Result<WorkflowRun, String> {
@@ -916,14 +1010,13 @@ pub(crate) fn create_workflow_run_record(
 ) -> Result<WorkflowRun, String> {
     ensure_scenario_owned(conn, owner_id, &input.scenario_id)?;
     ensure_combination_owned(conn, owner_id, &input.account_combination_id)?;
-    validate_run_status(&input.status)?;
-    if input.current_step_order < 0 {
-        return Err("INVALID_CURRENT_STEP_ORDER".to_string());
+    if input.status != "queued" || input.current_step_order != 0 {
+        return Err("INVALID_INITIAL_WORKFLOW_RUN_STATE".to_string());
     }
     let id = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO workflow_runs(id, scenario_id, account_combination_id, status, current_step_order, owner_id, started_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, CASE WHEN ?4 = 'queued' THEN NULL ELSE CURRENT_TIMESTAMP END)",
-        params![id, input.scenario_id, input.account_combination_id, input.status, input.current_step_order, owner_id],
+        "INSERT INTO workflow_runs(id, scenario_id, account_combination_id, status, current_step_order, owner_id) VALUES(?1, ?2, ?3, 'queued', 0, ?4)",
+        params![id, input.scenario_id, input.account_combination_id, owner_id],
     )
     .map_err(db_error)?;
     get_workflow_run(conn, owner_id, &id)
@@ -938,10 +1031,25 @@ pub(crate) fn update_workflow_run_record(
     if input.current_step_order < 0 {
         return Err("INVALID_CURRENT_STEP_ORDER".to_string());
     }
+    let current = get_workflow_run(conn, owner_id, &input.id)?;
+    if is_terminal_run_status(&current.status)
+        || input.current_step_order < current.current_step_order
+    {
+        return Err("INVALID_WORKFLOW_RUN_UPDATE".to_string());
+    }
+    if current.status == input.status {
+        if current.status == "queued" && input.current_step_order != 0 {
+            return Err("INVALID_WORKFLOW_RUN_UPDATE".to_string());
+        }
+    } else if !allows_run_transition(&current.status, &input.status) {
+        return Err("INVALID_WORKFLOW_RUN_TRANSITION".to_string());
+    } else if current.status == "queued" && input.current_step_order != 0 {
+        return Err("INVALID_WORKFLOW_RUN_UPDATE".to_string());
+    }
     let changed = conn
         .execute(
-            "UPDATE workflow_runs SET status=?1, current_step_order=?2, started_at=COALESCE(?3, started_at, CASE WHEN ?1 = 'queued' THEN NULL ELSE CURRENT_TIMESTAMP END), finished_at=?4, updated_at=CURRENT_TIMESTAMP WHERE id=?5 AND owner_id=?6",
-            params![input.status, input.current_step_order, input.started_at, input.finished_at, input.id, owner_id],
+            "UPDATE workflow_runs SET status=?1, current_step_order=?2, started_at=CASE WHEN started_at IS NULL AND ?1='running' THEN CURRENT_TIMESTAMP ELSE started_at END, finished_at=CASE WHEN finished_at IS NULL AND ?1 IN ('execution_blocked','business_failed','passed','cancelled') THEN CURRENT_TIMESTAMP ELSE finished_at END, updated_at=CURRENT_TIMESTAMP WHERE id=?3 AND owner_id=?4",
+            params![input.status, input.current_step_order, input.id, owner_id],
         )
         .map_err(db_error)?;
     if changed == 0 {
@@ -971,6 +1079,7 @@ pub(crate) fn append_workflow_run_event_record(
 ) -> Result<WorkflowRunEvent, String> {
     required(&input.phase, "PHASE")?;
     required(&input.message, "MESSAGE")?;
+    validate_persisted_text(&input.message, "WORKFLOW_EVENT_MESSAGE")?;
     validate_optional_role(&input.business_role)?;
     let transaction = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1045,6 +1154,9 @@ fn validate_failure_evidence_input(
     required(&input.step_id, "STEP_ID")?;
     required(&input.expected_value, "EXPECTED_VALUE")?;
     required(&input.actual_value, "ACTUAL_VALUE")?;
+    validate_persisted_text(&input.expected_value, "EXPECTED_VALUE")?;
+    validate_persisted_text(&input.actual_value, "ACTUAL_VALUE")?;
+    validate_screenshot_path(&input.screenshot_path)?;
     Ok(())
 }
 
@@ -1110,6 +1222,11 @@ fn validate_defect_draft_input(
     required(&input.expected_result, "EXPECTED_RESULT")?;
     required(&input.actual_result, "ACTUAL_RESULT")?;
     required(&input.impact_summary, "IMPACT_SUMMARY")?;
+    validate_persisted_text(&input.title, "DEFECT_TITLE")?;
+    validate_persisted_text(&input.reproduction_steps_json, "REPRODUCTION_STEPS")?;
+    validate_persisted_text(&input.expected_result, "EXPECTED_RESULT")?;
+    validate_persisted_text(&input.actual_result, "ACTUAL_RESULT")?;
+    validate_persisted_text(&input.impact_summary, "IMPACT_SUMMARY")?;
     ensure_scenario_owned(conn, owner_id, &input.scenario_id)?;
     let run = get_workflow_run(conn, owner_id, &input.run_id)?;
     if run.scenario_id != input.scenario_id {
@@ -1126,6 +1243,15 @@ fn validate_defect_draft_input(
 
 fn validate_defect_status(status: &str) -> Result<(), String> {
     allowed(status, DEFECT_STATUSES, "DEFECT_STATUS")
+}
+
+fn allows_defect_status_transition(current: &str, next: &str) -> bool {
+    matches!(
+        (current, next),
+        ("pending_confirmation", "pending_fix" | "not_a_bug")
+            | ("pending_fix", "pending_validation")
+            | ("pending_validation", "closed" | "pending_fix")
+    )
 }
 
 fn get_defect_draft(conn: &Connection, owner_id: &str, id: &str) -> Result<DefectDraft, String> {
@@ -1152,8 +1278,8 @@ pub(crate) fn save_defect_draft_record(
     if input.id.is_some() {
         let changed = conn
             .execute(
-                "UPDATE defect_drafts SET scenario_id=?1, run_id=?2, evidence_id=?3, status=?4, title=?5, reproduction_steps_json=?6, expected_result=?7, actual_result=?8, impact_summary=?9, business_role=?10, updated_at=CURRENT_TIMESTAMP WHERE id=?11 AND owner_id=?12",
-                params![input.scenario_id, input.run_id, input.evidence_id, input.status, input.title.trim(), input.reproduction_steps_json, input.expected_result.trim(), input.actual_result.trim(), input.impact_summary.trim(), input.business_role, id, owner_id],
+                "UPDATE defect_drafts SET scenario_id=?1, run_id=?2, evidence_id=?3, title=?4, reproduction_steps_json=?5, expected_result=?6, actual_result=?7, impact_summary=?8, business_role=?9, updated_at=CURRENT_TIMESTAMP WHERE id=?10 AND owner_id=?11",
+                params![input.scenario_id, input.run_id, input.evidence_id, input.title.trim(), input.reproduction_steps_json, input.expected_result.trim(), input.actual_result.trim(), input.impact_summary.trim(), input.business_role, id, owner_id],
             )
             .map_err(db_error)?;
         if changed == 0 {
@@ -1162,7 +1288,7 @@ pub(crate) fn save_defect_draft_record(
     } else {
         conn.execute(
             "INSERT INTO defect_drafts(id, scenario_id, run_id, evidence_id, status, title, reproduction_steps_json, expected_result, actual_result, impact_summary, business_role, owner_id) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![id, input.scenario_id, input.run_id, input.evidence_id, input.status, input.title.trim(), input.reproduction_steps_json, input.expected_result.trim(), input.actual_result.trim(), input.impact_summary.trim(), input.business_role, owner_id],
+            params![id, input.scenario_id, input.run_id, input.evidence_id, "pending_confirmation", input.title.trim(), input.reproduction_steps_json, input.expected_result.trim(), input.actual_result.trim(), input.impact_summary.trim(), input.business_role, owner_id],
         )
         .map_err(db_error)?;
     }
@@ -1190,6 +1316,10 @@ pub(crate) fn update_defect_draft_status_record(
     status: &str,
 ) -> Result<DefectDraft, String> {
     validate_defect_status(status)?;
+    let current = get_defect_draft(conn, owner_id, id)?;
+    if !allows_defect_status_transition(&current.status, status) {
+        return Err("INVALID_DEFECT_STATUS_TRANSITION".to_string());
+    }
     let changed = conn
         .execute("UPDATE defect_drafts SET status=?1, updated_at=CURRENT_TIMESTAMP WHERE id=?2 AND owner_id=?3", params![status, id, owner_id])
         .map_err(db_error)?;
