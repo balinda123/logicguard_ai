@@ -1,7 +1,8 @@
 use crate::testing::{
     self, AppendWorkflowRunEventInput, CreateTestAccountInput, CreateWorkflowRunInput,
-    SaveAccountCombinationInput, SaveDefectDraftInput, SaveFailureEvidenceInput,
-    SaveWorkflowScenarioInput, UpdateWorkflowRunInput,
+    LoginAutomationConfig, SaveAccountCombinationInput, SaveDefectDraftInput,
+    SaveFailureEvidenceInput, SaveWorkflowScenarioInput, UpdateTestAccountInput,
+    UpdateWorkflowRunInput,
 };
 use rusqlite::Connection;
 
@@ -24,11 +25,15 @@ fn account_input(business_role: &str) -> CreateTestAccountInput {
     CreateTestAccountInput {
         display_name: format!("{business_role} account"),
         business_role: business_role.to_string(),
-        masked_login_name: "tester***".to_string(),
-        credential_ref: "logicguard.test-account.employee-1".to_string(),
         login_mode: "automatic".to_string(),
-        login_config_json:
-            r##"{"url":"https://example.test/login","selectors":{"submit":"#login"}}"##.to_string(),
+        login_config: LoginAutomationConfig {
+            login_url: "https://example.test/login".to_string(),
+            page_selector: Some("main[data-page='login']".to_string()),
+            username_selector: Some("#username".to_string()),
+            password_selector: Some("#password".to_string()),
+            submit_selector: Some("#login".to_string()),
+            success_selector: Some("[data-test='home']".to_string()),
+        },
     }
 }
 
@@ -85,10 +90,15 @@ fn non_admin_cannot_create_test_accounts() {
 }
 
 #[test]
-fn account_dto_exposes_only_masked_and_referenced_credentials() {
+fn account_dto_generates_non_secret_credential_metadata() {
     let conn = connection();
     let account =
         testing::create_test_account_record(&conn, "admin", &account_input("employee")).unwrap();
+    assert_eq!(account.masked_login_name, "not-configured");
+    assert_eq!(
+        account.credential_ref,
+        format!("logicguard.test-account.{}", account.id)
+    );
     let serialized = serde_json::to_value(account).unwrap();
     let object = serialized.as_object().unwrap();
     assert!(object.contains_key("maskedLoginName"));
@@ -102,16 +112,63 @@ fn account_dto_exposes_only_masked_and_referenced_credentials() {
 }
 
 #[test]
-fn rejects_unknown_enums_and_invalid_or_secret_json() {
+fn rejects_caller_credential_fields_and_unstructured_login_config() {
+    let caller_supplied_credentials = r#"{
+        "displayName":"employee account",
+        "businessRole":"employee",
+        "maskedLoginName":"employee-real-name",
+        "credentialRef":"outside-keyring-reference",
+        "loginMode":"automatic",
+        "loginConfig":{"loginUrl":"https://example.test/login"}
+    }"#;
+    assert!(serde_json::from_str::<CreateTestAccountInput>(caller_supplied_credentials).is_err());
+
+    let update_with_caller_credentials = r#"{
+        "id":"account-id",
+        "displayName":"employee account",
+        "businessRole":"employee",
+        "maskedLoginName":"employee-real-name",
+        "credentialRef":"outside-keyring-reference",
+        "loginMode":"automatic",
+        "loginConfig":{"loginUrl":"https://example.test/login"}
+    }"#;
+    assert!(
+        serde_json::from_str::<UpdateTestAccountInput>(update_with_caller_credentials).is_err()
+    );
+
+    let arbitrary_json = r#"{
+        "displayName":"employee account",
+        "businessRole":"employee",
+        "loginMode":"automatic",
+        "loginConfig":"{\\"password\\":\\"must-not-be-stored\\"}"
+    }"#;
+    assert!(serde_json::from_str::<CreateTestAccountInput>(arbitrary_json).is_err());
+
+    let unknown_config_field = r#"{
+        "displayName":"employee account",
+        "businessRole":"employee",
+        "loginMode":"automatic",
+        "loginConfig":{"loginUrl":"https://example.test/login","password":"must-not-be-stored"}
+    }"#;
+    assert!(serde_json::from_str::<CreateTestAccountInput>(unknown_config_field).is_err());
+}
+
+#[test]
+fn rejects_unknown_enums_and_sensitive_login_config_values() {
     let conn = connection();
     let mut invalid_role = account_input("intern");
     assert!(testing::create_test_account_record(&conn, "admin", &invalid_role).is_err());
 
     invalid_role.business_role = "employee".to_string();
-    invalid_role.login_config_json = "not-json".to_string();
+    invalid_role.login_config.login_url = "ftp://example.test/login".to_string();
     assert!(testing::create_test_account_record(&conn, "admin", &invalid_role).is_err());
 
-    invalid_role.login_config_json = r#"{"password":"must-not-be-stored"}"#.to_string();
+    invalid_role.login_config.login_url =
+        "https://example.test/login?access_token=must-not-be-stored".to_string();
+    assert!(testing::create_test_account_record(&conn, "admin", &invalid_role).is_err());
+
+    invalid_role.login_config.login_url =
+        "https://employee:password@example.test/login".to_string();
     assert!(testing::create_test_account_record(&conn, "admin", &invalid_role).is_err());
 
     let scenario_id = create_scenario(&conn, "owner-a");
@@ -126,6 +183,57 @@ fn rejects_unknown_enums_and_invalid_or_secret_json() {
         },
     )
     .is_err());
+}
+
+#[test]
+fn accepts_only_valid_masked_login_names_after_credential_write() {
+    let conn = connection();
+    let account =
+        testing::create_test_account_record(&conn, "admin", &account_input("employee")).unwrap();
+
+    assert!(testing::update_masked_login_name_after_credential_write(
+        &conn,
+        &account.id,
+        "employee***"
+    )
+    .is_ok());
+    assert!(testing::update_masked_login_name_after_credential_write(
+        &conn,
+        &account.id,
+        "employee@example.test***"
+    )
+    .is_err());
+    assert!(testing::update_masked_login_name_after_credential_write(
+        &conn,
+        &account.id,
+        "employee**"
+    )
+    .is_err());
+}
+
+#[test]
+fn sqlite_test_account_metadata_contains_no_caller_secret_values() {
+    let conn = connection();
+    let account =
+        testing::create_test_account_record(&conn, "admin", &account_input("employee")).unwrap();
+    let stored: (String, String, String) = conn
+        .query_row(
+            "SELECT masked_login_name, credential_ref, login_config_json FROM test_accounts WHERE id=?1",
+            [&account.id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(stored.0, "not-configured");
+    assert_eq!(stored.1, format!("logicguard.test-account.{}", account.id));
+    for forbidden in [
+        "real-login",
+        "actual-password-value",
+        "actual-token-value",
+        "actual-otp-value",
+        "actual-secret-value",
+    ] {
+        assert!(!stored.2.contains(forbidden), "must not store {forbidden}");
+    }
 }
 
 #[test]

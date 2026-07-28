@@ -22,6 +22,26 @@ const DEFECT_STATUSES: &[&str] = &[
     "closed",
     "not_a_bug",
 ];
+const NOT_CONFIGURED_MASK: &str = "not-configured";
+const MAX_LOGIN_URL_LENGTH: usize = 2048;
+const MAX_SELECTOR_LENGTH: usize = 512;
+const MAX_MASKED_LOGIN_NAME_LENGTH: usize = 64;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginAutomationConfig {
+    pub login_url: String,
+    #[serde(default)]
+    pub page_selector: Option<String>,
+    #[serde(default)]
+    pub username_selector: Option<String>,
+    #[serde(default)]
+    pub password_selector: Option<String>,
+    #[serde(default)]
+    pub submit_selector: Option<String>,
+    #[serde(default)]
+    pub success_selector: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,33 +52,29 @@ pub struct TestAccount {
     pub masked_login_name: String,
     pub credential_ref: String,
     pub login_mode: String,
-    pub login_config_json: String,
+    pub login_config: LoginAutomationConfig,
     pub is_enabled: bool,
     pub created_at: String,
     pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateTestAccountInput {
     pub display_name: String,
     pub business_role: String,
-    pub masked_login_name: String,
-    pub credential_ref: String,
     pub login_mode: String,
-    pub login_config_json: String,
+    pub login_config: LoginAutomationConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateTestAccountInput {
     pub id: String,
     pub display_name: String,
     pub business_role: String,
-    pub masked_login_name: String,
-    pub credential_ref: String,
     pub login_mode: String,
-    pub login_config_json: String,
+    pub login_config: LoginAutomationConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,7 +297,84 @@ fn validate_optional_role(value: &Option<String>) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_untrusted_text(value: &str, max_length: usize, field: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > max_length || value.chars().any(char::is_control) {
+        return Err(format!("INVALID_{field}"));
+    }
+    Ok(())
+}
+
+fn validate_optional_selector(value: &Option<String>, field: &str) -> Result<(), String> {
+    if let Some(selector) = value {
+        validate_untrusted_text(selector, MAX_SELECTOR_LENGTH, field)?;
+    }
+    Ok(())
+}
+
+fn validate_login_config(config: &LoginAutomationConfig) -> Result<(), String> {
+    validate_untrusted_text(&config.login_url, MAX_LOGIN_URL_LENGTH, "LOGIN_URL")?;
+    let url =
+        reqwest::Url::parse(&config.login_url).map_err(|_| "INVALID_LOGIN_URL".to_string())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err("INVALID_LOGIN_URL".to_string());
+    }
+    for (key, _) in url.query_pairs() {
+        let normalized = key.to_ascii_lowercase();
+        if [
+            "token",
+            "password",
+            "otp",
+            "secret",
+            "access_key",
+            "accesskey",
+        ]
+        .iter()
+        .any(|fragment| normalized.contains(fragment))
+        {
+            return Err("SENSITIVE_LOGIN_URL_QUERY".to_string());
+        }
+    }
+    validate_optional_selector(&config.page_selector, "PAGE_SELECTOR")?;
+    validate_optional_selector(&config.username_selector, "USERNAME_SELECTOR")?;
+    validate_optional_selector(&config.password_selector, "PASSWORD_SELECTOR")?;
+    validate_optional_selector(&config.submit_selector, "SUBMIT_SELECTOR")?;
+    validate_optional_selector(&config.success_selector, "SUCCESS_SELECTOR")
+}
+
+fn validate_masked_login_name(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > MAX_MASKED_LOGIN_NAME_LENGTH
+        || value
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+        || value.contains('@')
+    {
+        return Err("INVALID_MASKED_LOGIN_NAME".to_string());
+    }
+    let first_star = value
+        .find('*')
+        .ok_or_else(|| "INVALID_MASKED_LOGIN_NAME".to_string())?;
+    let (prefix, mask) = value.split_at(first_star);
+    if prefix.is_empty()
+        || mask.len() < 3
+        || !mask.chars().all(|character| character == '*')
+        || !prefix.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+    {
+        return Err("INVALID_MASKED_LOGIN_NAME".to_string());
+    }
+    Ok(())
+}
+
 fn read_test_account(row: &Row<'_>) -> rusqlite::Result<TestAccount> {
+    let login_config_json: String = row.get(6)?;
+    let login_config = serde_json::from_str(&login_config_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(error))
+    })?;
     Ok(TestAccount {
         id: row.get(0)?,
         display_name: row.get(1)?,
@@ -289,7 +382,7 @@ fn read_test_account(row: &Row<'_>) -> rusqlite::Result<TestAccount> {
         masked_login_name: row.get(3)?,
         credential_ref: row.get(4)?,
         login_mode: row.get(5)?,
-        login_config_json: row.get(6)?,
+        login_config,
         is_enabled: row.get::<_, i64>(7)? != 0,
         created_at: row.get(8)?,
         updated_at: row.get(9)?,
@@ -485,11 +578,9 @@ pub(crate) fn ensure_admin_role(role: &str) -> Result<(), String> {
 
 fn validate_test_account_input(input: &CreateTestAccountInput) -> Result<(), String> {
     required(&input.display_name, "DISPLAY_NAME")?;
-    required(&input.masked_login_name, "MASKED_LOGIN_NAME")?;
-    required(&input.credential_ref, "CREDENTIAL_REF")?;
     allowed(&input.business_role, BUSINESS_ROLES, "BUSINESS_ROLE")?;
     allowed(&input.login_mode, LOGIN_MODES, "LOGIN_MODE")?;
-    validate_safe_json(&input.login_config_json, "LOGIN_CONFIG_JSON")
+    validate_login_config(&input.login_config)
 }
 
 pub(crate) fn create_test_account_record(
@@ -500,10 +591,13 @@ pub(crate) fn create_test_account_record(
     ensure_admin_role(actor_role)?;
     validate_test_account_input(input)?;
     let id = Uuid::new_v4().to_string();
+    let credential_ref = format!("logicguard.test-account.{id}");
+    let login_config_json = serde_json::to_string(&input.login_config)
+        .map_err(|_| "INVALID_LOGIN_CONFIG".to_string())?;
     conn.execute(
         "INSERT INTO test_accounts(id, display_name, business_role, masked_login_name, credential_ref, login_mode, login_config_json)
          VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![id, input.display_name.trim(), input.business_role, input.masked_login_name.trim(), input.credential_ref.trim(), input.login_mode, input.login_config_json],
+        params![id, input.display_name.trim(), input.business_role, NOT_CONFIGURED_MASK, credential_ref, input.login_mode, login_config_json],
     )
     .map_err(db_error)?;
     get_test_account(conn, &id)
@@ -540,21 +634,40 @@ pub(crate) fn update_test_account_record(
     validate_test_account_input(&CreateTestAccountInput {
         display_name: input.display_name.clone(),
         business_role: input.business_role.clone(),
-        masked_login_name: input.masked_login_name.clone(),
-        credential_ref: input.credential_ref.clone(),
         login_mode: input.login_mode.clone(),
-        login_config_json: input.login_config_json.clone(),
+        login_config: input.login_config.clone(),
     })?;
+    let login_config_json = serde_json::to_string(&input.login_config)
+        .map_err(|_| "INVALID_LOGIN_CONFIG".to_string())?;
     let changed = conn
         .execute(
-            "UPDATE test_accounts SET display_name=?1, business_role=?2, masked_login_name=?3, credential_ref=?4, login_mode=?5, login_config_json=?6, updated_at=CURRENT_TIMESTAMP WHERE id=?7",
-            params![input.display_name.trim(), input.business_role, input.masked_login_name.trim(), input.credential_ref.trim(), input.login_mode, input.login_config_json, input.id],
+            "UPDATE test_accounts SET display_name=?1, business_role=?2, login_mode=?3, login_config_json=?4, updated_at=CURRENT_TIMESTAMP WHERE id=?5",
+            params![input.display_name.trim(), input.business_role, input.login_mode, login_config_json, input.id],
         )
         .map_err(db_error)?;
     if changed == 0 {
         return Err("NOT_FOUND".to_string());
     }
     get_test_account(conn, &input.id)
+}
+
+pub(crate) fn update_masked_login_name_after_credential_write(
+    conn: &Connection,
+    id: &str,
+    masked_login_name: &str,
+) -> Result<(), String> {
+    validate_masked_login_name(masked_login_name)?;
+    let changed = conn
+        .execute(
+            "UPDATE test_accounts SET masked_login_name=?1, updated_at=CURRENT_TIMESTAMP WHERE id=?2",
+            params![masked_login_name, id],
+        )
+        .map_err(db_error)?;
+    if changed == 0 {
+        Err("NOT_FOUND".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 pub(crate) fn disable_test_account_record(
