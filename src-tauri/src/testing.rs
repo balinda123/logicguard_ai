@@ -256,6 +256,34 @@ fn required(value: &str, field: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn normalized_persisted_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !matches!(character, '_' | '-' | ' '))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn is_sensitive_persisted_key(value: &str) -> bool {
+    let normalized = normalized_persisted_key(value);
+    [
+        "password",
+        "passwd",
+        "pwd",
+        "otp",
+        "token",
+        "accesstoken",
+        "apikey",
+        "secret",
+        "authorization",
+        "bearer",
+        "username",
+        "loginname",
+    ]
+    .iter()
+    .any(|fragment| normalized.contains(fragment))
+}
+
 fn has_sensitive_value_after_marker(value: &str, marker: &str) -> bool {
     let normalized = value.to_ascii_lowercase();
     normalized.match_indices(marker).any(|(index, _)| {
@@ -267,8 +295,12 @@ fn has_sensitive_value_after_marker(value: &str, marker: &str) -> bool {
         if marker_is_word {
             return false;
         }
-        if after.starts_with('=') || after.starts_with(':') {
-            return !after[1..].trim().is_empty();
+        let after_quoted_marker = after
+            .trim_start()
+            .trim_start_matches(|character| matches!(character, '\"' | '\''))
+            .trim_start();
+        if after_quoted_marker.starts_with('=') || after_quoted_marker.starts_with(':') {
+            return !after_quoted_marker[1..].trim().is_empty();
         }
         if after.chars().next().is_some_and(char::is_whitespace) {
             let next_word = after.trim().split_whitespace().next().unwrap_or_default();
@@ -291,19 +323,34 @@ fn contains_sensitive_persisted_value(value: &str) -> bool {
         "otp",
         "one-time-code",
         "token",
+        "access token",
+        "access-token",
+        "access_token",
+        "refresh token",
+        "refresh-token",
+        "refresh_token",
         "api key",
         "api-key",
         "api_key",
         "secret",
         "authorization",
         "bearer",
+        "username",
+        "user-name",
+        "user_name",
+        "login name",
+        "login-name",
+        "login_name",
     ]
     .iter()
     .any(|marker| has_sensitive_value_after_marker(value, marker))
 }
 
 fn validate_persisted_text(value: &str, field: &str) -> Result<(), String> {
-    if contains_sensitive_persisted_value(value) {
+    let contains_sensitive_json_key = serde_json::from_str::<Value>(value)
+        .map(|parsed| contains_sensitive_key(&parsed))
+        .unwrap_or(false);
+    if contains_sensitive_json_key || contains_sensitive_persisted_value(value) {
         Err(format!("SENSITIVE_{field}"))
     } else {
         Ok(())
@@ -356,26 +403,9 @@ fn allowed(value: &str, values: &[&str], field: &str) -> Result<(), String> {
 
 fn contains_sensitive_key(value: &Value) -> bool {
     match value {
-        Value::Object(map) => map.iter().any(|(key, value)| {
-            let normalized = key.to_ascii_lowercase();
-            let sensitive = [
-                "password",
-                "passwd",
-                "pwd",
-                "secret",
-                "otp",
-                "access_token",
-                "accesstoken",
-                "refresh_token",
-                "refreshtoken",
-                "username",
-                "login_name",
-                "loginname",
-            ]
+        Value::Object(map) => map
             .iter()
-            .any(|fragment| normalized.contains(fragment));
-            sensitive || contains_sensitive_key(value)
-        }),
+            .any(|(key, value)| is_sensitive_persisted_key(key) || contains_sensitive_key(value)),
         Value::Array(items) => items.iter().any(contains_sensitive_key),
         _ => false,
     }

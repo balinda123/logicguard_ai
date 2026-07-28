@@ -520,6 +520,25 @@ fn rejects_sensitive_values_before_events_evidence_and_defects_reach_sqlite() {
         },
     )
     .is_err());
+    for message in [
+        r#"{"username":"real-user","password":"real-secret"}"#,
+        r#""login_name":"real-login""#,
+        r#""access_token":"real-token""#,
+        r#""api_key":"real-api-key""#,
+    ] {
+        let error = testing::append_workflow_run_event_record(
+            &mut conn,
+            "owner-a",
+            &AppendWorkflowRunEventInput {
+                run_id: run.id.clone(),
+                phase: "assertion_failed".to_string(),
+                business_role: Some("employee".to_string()),
+                message: message.to_string(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, "SENSITIVE_WORKFLOW_EVENT_MESSAGE");
+    }
 
     for phase in ["custom_phase", "token=secret"] {
         assert!(testing::append_workflow_run_event_record(
@@ -569,6 +588,38 @@ fn rejects_sensitive_values_before_events_evidence_and_defects_reach_sqlite() {
             },
         )
         .is_err());
+    }
+    for (expected_value, actual_value, expected_error) in [
+        (
+            r#"{"username":"real-user"}"#,
+            "validation failed",
+            "SENSITIVE_EXPECTED_VALUE",
+        ),
+        (
+            "validation failed",
+            r#"{"login_name":"real-login","access_token":"real-token"}"#,
+            "SENSITIVE_ACTUAL_VALUE",
+        ),
+        (
+            "validation failed",
+            r#""password":"quoted-secret""#,
+            "SENSITIVE_ACTUAL_VALUE",
+        ),
+    ] {
+        let error = testing::save_failure_evidence_record(
+            &conn,
+            "owner-a",
+            &SaveFailureEvidenceInput {
+                id: None,
+                run_id: run.id.clone(),
+                step_id: "step-1".to_string(),
+                expected_value: expected_value.to_string(),
+                actual_value: actual_value.to_string(),
+                screenshot_path: None,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, expected_error);
     }
     assert!(testing::save_failure_evidence_record(
         &conn,
@@ -620,6 +671,8 @@ fn rejects_sensitive_values_before_events_evidence_and_defects_reach_sqlite() {
     assert!(!stored_event.contains("password=real-secret"));
     assert!(!stored_event.contains("Bearer abc"));
     assert!(!stored_event.contains("password real-secret"));
+    assert!(!stored_event.contains("real-user"));
+    assert!(!stored_event.contains("real-login"));
     let stored_phase: String = conn
         .query_row(
             "SELECT group_concat(phase, '|') FROM workflow_events",
@@ -638,6 +691,26 @@ fn rejects_sensitive_values_before_events_evidence_and_defects_reach_sqlite() {
         .unwrap()
         .unwrap_or_default();
     assert!(!stored_step_id.contains("token=secret"));
+    let stored_evidence: String = conn
+        .query_row(
+            "SELECT group_concat(expected_value || '|' || actual_value, '|') FROM failure_evidence",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .unwrap()
+        .unwrap_or_default();
+    for raw_value in [
+        "real-user",
+        "real-login",
+        "real-token",
+        "real-api-key",
+        "quoted-secret",
+    ] {
+        assert!(
+            !stored_evidence.contains(raw_value),
+            "sensitive value must not reach failure_evidence"
+        );
+    }
     for table in ["failure_evidence", "defect_drafts"] {
         let count: i64 = conn
             .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
