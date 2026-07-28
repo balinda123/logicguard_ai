@@ -59,6 +59,8 @@ stdout 最后一行返回 JSON：
 | `wait_for` | 等待元素或状态 |
 | `assert` | 文本断言 |
 | `screenshot` | 截图到文件 |
+| `clear_session` | 清除 cookies、localStorage、sessionStorage，并回到安全初始页 |
+| `login_with_credentials` | 仅由 Rust 通过临时环境变量调用的自动登录命令，不接收命令行凭据 |
 | `act` | Stagehand 单步自然语言操作 |
 | `observe` | Stagehand 页面观察 |
 | `agent` | Stagehand 闭环 Agent 执行 |
@@ -74,7 +76,7 @@ stdout 最后一行返回 JSON：
 | `LLM_API_KEY` | 从 Windows Credential Manager 或 macOS Keychain 读取后临时注入 |
 | `LLM_BASE_URL` | OpenAI Compatible 服务地址 |
 
-API Key 不应写入 localStorage、SQLite、日志、报告或本目录文件。
+API Key 不应写入 localStorage、SQLite、日志、报告或本目录文件。测试账号登录凭据同样只由 Rust 从系统凭据库读取，并通过短生命周期 `LG_BROWSER_LOGIN_PAYLOAD` 环境变量传给 `login_with_credentials`；sidecar 不输出用户名、密码、验证码或令牌。
 
 ## CDP 与浏览器约定
 
