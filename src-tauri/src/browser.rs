@@ -93,7 +93,7 @@ struct BrowserLoginPayload {
     password: String,
 }
 
-pub(crate) enum TestAccountLoginOutcome {
+enum TestAccountLoginOutcome {
     Completed { final_url: String },
     ManualHandoffRequired,
 }
@@ -232,7 +232,7 @@ fn required_login_selector(value: Option<String>) -> Result<String, String> {
     value.ok_or_else(|| "AUTOMATIC_LOGIN_CONFIG_INCOMPLETE".to_string())
 }
 
-pub(crate) fn browser_login_test_account(
+fn login_test_account(
     app: &tauri::AppHandle,
     account_id: &str,
     port: Option<u16>,
@@ -301,6 +301,32 @@ fn parse_response<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<T, String> 
 
 /// 获取当前 Chrome 页面快照
 /// 📚 前端调用: await invoke('browser_get_snapshot', { port: 9222 })
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestAccountLoginResult {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_url: Option<String>,
+}
+
+#[command]
+pub fn browser_login_test_account(
+    app: tauri::AppHandle,
+    account_id: String,
+    port: Option<u16>,
+) -> Result<TestAccountLoginResult, String> {
+    match login_test_account(&app, &account_id, port)? {
+        TestAccountLoginOutcome::Completed { final_url } => Ok(TestAccountLoginResult {
+            status: "completed".to_string(),
+            final_url: Some(final_url),
+        }),
+        TestAccountLoginOutcome::ManualHandoffRequired => Ok(TestAccountLoginResult {
+            status: "manual_handoff_required".to_string(),
+            final_url: None,
+        }),
+    }
+}
+
 #[command]
 pub fn browser_get_snapshot(port: Option<u16>, config: Option<LlmConfig>) -> Result<PageSnapshot, String> {
     let cdp_port = port.unwrap_or(9222).to_string();

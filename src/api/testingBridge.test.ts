@@ -5,6 +5,7 @@ import {
   captureFailureScreenshot,
   clearBrowserSession,
   createTestAccount,
+  loginTestAccount,
   listTestAccounts,
   saveWorkflowScenario,
   setTestAccountCredential,
@@ -127,5 +128,20 @@ describe('testingBridge', () => {
         sourceTestCaseId: 'case-1',
       }),
     })
+  })
+
+  it('starts automatic login by account id without receiving credentials', async () => {
+    invokeMock.mockResolvedValueOnce({ status: 'completed', finalUrl: 'https://example.test/home' })
+
+    await expect(loginTestAccount('account-1')).resolves.toEqual({
+      status: 'completed',
+      finalUrl: 'https://example.test/home',
+    })
+
+    expect(invokeMock).toHaveBeenCalledWith('browser_login_test_account', {
+      accountId: 'account-1',
+      port: 9222,
+    })
+    expect(JSON.stringify(invokeMock.mock.calls)).not.toMatch(/password|username|credential/i)
   })
 })

@@ -4,6 +4,7 @@ import { Dashboard } from './pages/Dashboard';
 import { TestCases } from './pages/TestCases';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
+import { ExecutionCenter } from './pages/ExecutionCenter';
 import type { SystemStatus } from './types';
 import { getLlmConfig, isConfigured, testLlmConnection } from './api/llmBridge';
 import { checkBrowserConnection } from './api/browserBridge';
@@ -56,6 +57,8 @@ function AuthenticatedApp({ user }: { user: SessionUser }) {
         return <TestCases />;
       case 'reports':
         return <Reports />;
+      case 'execution':
+        return <ExecutionCenter />;
       case 'settings':
         return <Settings status={status} setStatus={setStatus} currentUser={user} />;
       default:

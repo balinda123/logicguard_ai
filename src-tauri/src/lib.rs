@@ -74,6 +74,7 @@ pub fn run() {
             browser::browser_press,
             browser::browser_navigate,
             browser::browser_assert,
+            browser::browser_login_test_account,
             browser::browser_clear_session,
             browser::browser_capture_failure_screenshot,
             browser::browser_check_connection,

@@ -411,6 +411,14 @@ export async function clearBrowserSession(): Promise<void> {
   await invoke('browser_clear_session', { port: getCdpPort() })
 }
 
+/** Starts a credential-store-owned login. No credential is readable by the frontend. */
+export async function loginTestAccount(accountId: string): Promise<{
+  status: 'completed' | 'manual_handoff_required'
+  finalUrl?: string
+}> {
+  return await invoke('browser_login_test_account', { accountId, port: getCdpPort() })
+}
+
 export async function captureFailureScreenshot(runId: string, stepId: string): Promise<{ screenshotPath: string }> {
   return await invoke<{ screenshotPath: string }>('browser_capture_failure_screenshot', {
     runId,
