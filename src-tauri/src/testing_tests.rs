@@ -28,11 +28,11 @@ fn account_input(business_role: &str) -> CreateTestAccountInput {
         login_mode: "automatic".to_string(),
         login_config: LoginAutomationConfig {
             login_url: "https://example.test/login".to_string(),
-            page_selector: Some("main[data-page='login']".to_string()),
+            page_selector: Some("main[data-page]".to_string()),
             username_selector: Some("#username".to_string()),
             password_selector: Some("#password".to_string()),
             submit_selector: Some("#login".to_string()),
-            success_selector: Some("[data-test='home']".to_string()),
+            success_selector: Some("[data-test]".to_string()),
         },
     }
 }
@@ -167,8 +167,21 @@ fn rejects_unknown_enums_and_sensitive_login_config_values() {
         "https://example.test/login?access_token=must-not-be-stored".to_string();
     assert!(testing::create_test_account_record(&conn, "admin", &invalid_role).is_err());
 
+    invalid_role.login_config.login_url = "https://example.test/login?next=dashboard".to_string();
+    assert!(testing::create_test_account_record(&conn, "admin", &invalid_role).is_err());
+
+    invalid_role.login_config.login_url = "https://example.test/login#handoff".to_string();
+    assert!(testing::create_test_account_record(&conn, "admin", &invalid_role).is_err());
+
     invalid_role.login_config.login_url =
         "https://employee:password@example.test/login".to_string();
+    assert!(testing::create_test_account_record(&conn, "admin", &invalid_role).is_err());
+
+    invalid_role.login_config.login_url = "https://example.test/login".to_string();
+    invalid_role.login_config.page_selector = Some("[data-note='real-password']".to_string());
+    assert!(testing::create_test_account_record(&conn, "admin", &invalid_role).is_err());
+
+    invalid_role.login_config.page_selector = Some("#token=secret".to_string());
     assert!(testing::create_test_account_record(&conn, "admin", &invalid_role).is_err());
 
     let scenario_id = create_scenario(&conn, "owner-a");

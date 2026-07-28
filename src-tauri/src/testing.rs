@@ -307,6 +307,15 @@ fn validate_untrusted_text(value: &str, max_length: usize, field: &str) -> Resul
 fn validate_optional_selector(value: &Option<String>, field: &str) -> Result<(), String> {
     if let Some(selector) = value {
         validate_untrusted_text(selector, MAX_SELECTOR_LENGTH, field)?;
+        // Persisted selector metadata must be an identifier-only CSS fragment, never a text locator.
+        if selector.chars().any(char::is_whitespace)
+            || !selector.chars().all(|character| {
+                character.is_ascii_alphanumeric()
+                    || matches!(character, '#' | '.' | '[' | ']' | '_' | '-')
+            })
+        {
+            return Err(format!("INVALID_{field}"));
+        }
     }
     Ok(())
 }
@@ -318,24 +327,10 @@ fn validate_login_config(config: &LoginAutomationConfig) -> Result<(), String> {
     if !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
         || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
     {
         return Err("INVALID_LOGIN_URL".to_string());
-    }
-    for (key, _) in url.query_pairs() {
-        let normalized = key.to_ascii_lowercase();
-        if [
-            "token",
-            "password",
-            "otp",
-            "secret",
-            "access_key",
-            "accesskey",
-        ]
-        .iter()
-        .any(|fragment| normalized.contains(fragment))
-        {
-            return Err("SENSITIVE_LOGIN_URL_QUERY".to_string());
-        }
     }
     validate_optional_selector(&config.page_selector, "PAGE_SELECTOR")?;
     validate_optional_selector(&config.username_selector, "USERNAME_SELECTOR")?;
