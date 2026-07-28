@@ -47,11 +47,12 @@ export interface WorkflowScenario {
 
 /** Contains only browser field selectors and human-readable login expectations. */
 export interface LoginAutomationConfig {
-  loginUrl?: string
-  loginNameSelector?: string
-  credentialSelector?: string
+  loginUrl: string
+  pageSelector?: string
+  usernameSelector?: string
+  passwordSelector?: string
   submitSelector?: string
-  postLoginAssertion?: string
+  successSelector?: string
 }
 
 export interface TestAccount {
@@ -80,7 +81,7 @@ export interface AccountCombination {
 export interface WorkflowRun {
   id: string
   scenarioId: string
-  accountCombinationId: string
+  accountCombinationId?: string
   status: RunStatus
   currentStepIndex: number
   startedAt?: string

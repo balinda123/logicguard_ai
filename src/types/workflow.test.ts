@@ -94,10 +94,10 @@ describe('workflow domain rules', () => {
       enabled: true,
       loginConfig: {
         loginUrl: 'https://example.test/login',
-        loginNameSelector: '#login-name',
-        credentialSelector: '#credential',
+        usernameSelector: '#login-name',
+        passwordSelector: '#credential',
         submitSelector: 'button[type="submit"]',
-        postLoginAssertion: 'Welcome',
+        successSelector: '#welcome',
       },
       createdAt: '2026-07-27T00:00:00.000Z',
       updatedAt: '2026-07-27T00:00:00.000Z',

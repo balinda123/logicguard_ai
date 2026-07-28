@@ -23,6 +23,8 @@ const DEFECT_STATUSES: &[&str] = &[
     "not_a_bug",
 ];
 const NOT_CONFIGURED_MASK: &str = "not-configured";
+const TEST_ACCOUNT_CREDENTIAL_SERVICE: &str = "com.logicguard.ai.test-account";
+const MAX_CREDENTIAL_VALUE_LENGTH: usize = 512;
 const MAX_LOGIN_URL_LENGTH: usize = 2048;
 const MAX_SELECTOR_LENGTH: usize = 512;
 const MAX_MASKED_LOGIN_NAME_LENGTH: usize = 64;
@@ -67,6 +69,25 @@ pub struct TestAccount {
     pub is_enabled: bool,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// Kept inside the Rust process only. This type must never cross a Tauri boundary.
+pub(crate) struct StoredBrowserCredential {
+    pub(crate) username: String,
+    pub(crate) password: String,
+}
+
+/// Combines browser metadata with an OS-keyring credential for the internal executor.
+pub(crate) struct AutomaticBrowserLogin {
+    pub(crate) login_config: LoginAutomationConfig,
+    pub(crate) credential: StoredBrowserCredential,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredCredentialPayload {
+    username: String,
+    password: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -494,6 +515,22 @@ fn validate_masked_login_name(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_credential_value(value: &str, field: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > MAX_CREDENTIAL_VALUE_LENGTH || value.chars().any(char::is_control) {
+        return Err(format!("INVALID_{field}"));
+    }
+    Ok(())
+}
+
+pub(crate) fn mask_login_name(username: &str) -> String {
+    let visible: String = username
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-'))
+        .take(2)
+        .collect();
+    format!("{}***", if visible.is_empty() { "user" } else { &visible })
+}
+
 fn read_test_account(row: &Row<'_>) -> rusqlite::Result<TestAccount> {
     let login_config_json: String = row.get(6)?;
     let login_config = serde_json::from_str(&login_config_json).map_err(|error| {
@@ -792,6 +829,38 @@ pub(crate) fn update_masked_login_name_after_credential_write(
     } else {
         Ok(())
     }
+}
+
+pub(crate) fn load_automatic_login(
+    app: &tauri::AppHandle,
+    account_id: &str,
+) -> Result<AutomaticBrowserLogin, String> {
+    crate::auth::current_user()?;
+    let conn = crate::auth::open_db(app)?;
+    let account = get_test_account(&conn, account_id)?;
+    if !account.is_enabled {
+        return Err("TEST_ACCOUNT_DISABLED".to_string());
+    }
+    if account.login_mode != "automatic" {
+        return Err("MANUAL_HANDOFF_REQUIRED".to_string());
+    }
+    let stored = keyring::Entry::new(TEST_ACCOUNT_CREDENTIAL_SERVICE, &account.credential_ref)
+        .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_UNAVAILABLE".to_string())?
+        .get_password()
+        .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_UNAVAILABLE".to_string())?;
+    let payload: StoredCredentialPayload = serde_json::from_str(&stored)
+        .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_INVALID".to_string())?;
+    validate_credential_value(&payload.username, "USERNAME")
+        .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_INVALID".to_string())?;
+    validate_credential_value(&payload.password, "PASSWORD")
+        .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_INVALID".to_string())?;
+    Ok(AutomaticBrowserLogin {
+        login_config: account.login_config,
+        credential: StoredBrowserCredential {
+            username: payload.username,
+            password: payload.password,
+        },
+    })
 }
 
 pub(crate) fn disable_test_account_record(
@@ -1425,6 +1494,28 @@ pub fn disable_test_account(app: tauri::AppHandle, id: String) -> Result<(), Str
     let admin = crate::auth::require_admin()?;
     let conn = crate::auth::open_db(&app)?;
     disable_test_account_record(&conn, &admin.role, &id)
+}
+
+#[tauri::command]
+pub fn set_test_account_credential(
+    app: tauri::AppHandle,
+    account_id: String,
+    username: String,
+    password: String,
+) -> Result<(), String> {
+    crate::auth::require_admin()?;
+    validate_credential_value(&username, "USERNAME")?;
+    validate_credential_value(&password, "PASSWORD")?;
+    let conn = crate::auth::open_db(&app)?;
+    let account = get_test_account(&conn, &account_id)?;
+    let masked_login_name = mask_login_name(&username);
+    let serialized = serde_json::to_string(&StoredCredentialPayload { username, password })
+        .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_SERIALIZATION_FAILED".to_string())?;
+    keyring::Entry::new(TEST_ACCOUNT_CREDENTIAL_SERVICE, &account.credential_ref)
+        .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_UNAVAILABLE".to_string())?
+        .set_password(&serialized)
+        .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_WRITE_FAILED".to_string())?;
+    update_masked_login_name_after_credential_write(&conn, &account.id, &masked_login_name)
 }
 
 #[tauri::command]

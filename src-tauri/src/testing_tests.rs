@@ -160,6 +160,13 @@ fn account_dto_generates_non_secret_credential_metadata() {
 }
 
 #[test]
+fn credential_write_masks_username_before_persisting_metadata() {
+    assert_eq!(testing::mask_login_name("employee@example.test"), "em***");
+    assert_eq!(testing::mask_login_name("01-user"), "01***");
+    assert_eq!(testing::mask_login_name("\u{4f60}\u{597d}"), "user***");
+}
+
+#[test]
 fn rejects_caller_credential_fields_and_unstructured_login_config() {
     let caller_supplied_credentials = r#"{
         "displayName":"employee account",
