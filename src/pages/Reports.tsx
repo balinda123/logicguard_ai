@@ -1,567 +1,102 @@
-﻿import React, { useState, useEffect } from "react";
-import {
-  BarChart3,
-  Clock,
-  CheckCircle2,
-  XCircle,
-  FileText,
-  Search,
-  ArrowLeft,
-  Play,
-  Activity,
-  Sparkles,
-  FileCheck,
-  Zap,
-} from "lucide-react";
-import type { TestResult } from "../types";
-import { scopedStorageKey } from "../api/auth";
+import { useEffect, useMemo, useState } from 'react'
+import { ArrowLeft, Clock, FileClock, ListChecks, Search } from 'lucide-react'
 
-export const Reports: React.FC = () => {
-  const [results, setResults] = useState<TestResult[]>([]);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState<
-    "all" | "success" | "failed"
-  >("all");
-  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+import { listWorkflowRunEvents, listWorkflowRuns, listWorkflowScenarios } from '../api/testingBridge'
+import { scopedStorageKey } from '../api/auth'
+import type { WorkflowRun, WorkflowRunEvent, WorkflowScenario } from '../types/workflow'
+
+interface ReportsProps {
+  onNavigate?: (tab: string) => void
+}
+
+interface LegacyResult {
+  id: string
+  testName?: string
+  task?: string
+  testStatus?: 'success' | 'failed' | 'pending'
+  createdAt?: string
+}
+
+const STATUS_LABEL: Record<WorkflowRun['status'], string> = {
+  queued: '待执行',
+  running: '执行中',
+  waiting_handoff: '等待交接',
+  execution_blocked: '执行受阻',
+  business_failed: '业务失败',
+  passed: '通过',
+  cancelled: '已取消',
+}
+
+function readLegacyResults(): LegacyResult[] {
+  try {
+    const raw = localStorage.getItem(scopedStorageKey('logicguard_test_results'))
+    const parsed: unknown = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed.filter((item): item is LegacyResult => Boolean(item) && typeof item === 'object' && typeof (item as LegacyResult).id === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function displayTime(value?: string): string {
+  if (!value) return '未记录'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+export function Reports({ onNavigate }: ReportsProps) {
+  const [runs, setRuns] = useState<WorkflowRun[]>([])
+  const [scenarios, setScenarios] = useState<WorkflowScenario[]>([])
+  const [legacyResults, setLegacyResults] = useState<LegacyResult[]>([])
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [events, setEvents] = useState<WorkflowRunEvent[]>([])
+  const [keyword, setKeyword] = useState('')
+  const [status, setStatus] = useState<'all' | WorkflowRun['status']>('all')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const selectedRun = runs.find(item => item.id === selectedRunId) ?? null
+  const scenarioTitle = useMemo(() => new Map(scenarios.map(item => [item.id, item.title])), [scenarios])
+  const filteredRuns = useMemo(() => {
+    const search = keyword.trim().toLowerCase()
+    return runs.filter(run => {
+      const title = scenarioTitle.get(run.scenarioId) ?? run.scenarioId
+      return (status === 'all' || run.status === status) && (!search || `${title} ${run.id}`.toLowerCase().includes(search))
+    })
+  }, [keyword, runs, scenarioTitle, status])
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const [nextRuns, nextScenarios] = await Promise.all([listWorkflowRuns(), listWorkflowScenarios()])
+      setRuns(nextRuns)
+      setScenarios(nextScenarios)
+      setLegacyResults(readLegacyResults())
+      setSelectedRunId(current => current && nextRuns.some(item => item.id === current) ? current : null)
+      setError(null)
+    } catch {
+      setError('无法加载真实流程执行历史，请稍后重试。')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
-    const loadReports = async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        let rawList = "[]";
-        try {
-          rawList = await invoke<string>("load_reports_from_file");
-        } catch (err) {
-          console.warn("load_reports_from_file failed, falling back to localStorage", err);
-          rawList = localStorage.getItem(scopedStorageKey("logicguard_test_results")) || "[]";
-        }
+    void load()
+  }, [])
 
-        const parsed = JSON.parse(rawList);
-        const realRuns = parsed.filter(
-          (r: any) => !["res_001", "res_002", "res_003"].includes(r.id)
-        );
-        setResults(realRuns);
-        
-        try {
-          await invoke("save_reports_to_file", { data: JSON.stringify(realRuns) });
-        } catch {
-          localStorage.setItem(scopedStorageKey("logicguard_test_results"), JSON.stringify(realRuns));
-        }
-      } catch (e) {
-        console.warn("Failed to load reports", e);
-        setResults([]);
-      }
-    };
-    loadReports();
-  }, []);
-
-  // Filter reports
-  const filteredResults = results.filter((r) => {
-    const matchesSearch =
-      r.testName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      r.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      r.task.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (r.suiteName ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (r.caseName ?? '').toLowerCase().includes(searchTerm.toLowerCase());
-
-    const matchesStatus =
-      statusFilter === "all" ||
-      (statusFilter === "success" && r.testStatus === "success") ||
-      (statusFilter === "failed" && r.testStatus === "failed");
-
-    return matchesSearch && matchesStatus;
-  });
-
-  const successCount = results.filter((r) => r.testStatus === "success").length;
-  const totalCount = results.length;
-  const successRate =
-    totalCount > 0 ? Math.round((successCount / totalCount) * 100) : 0;
-  const avgResponseTime =
-    totalCount > 0
-      ? (
-          results.reduce((acc, r: any) => {
-            if (r.duration !== undefined) return acc + r.duration;
-            if (r.completedAt && r.createdAt) {
-              const start = new Date(r.createdAt.replace(/-/g, "/")).getTime();
-              const end = new Date(r.completedAt.replace(/-/g, "/")).getTime();
-              if (!isNaN(start) && !isNaN(end) && end >= start) {
-                return acc + (end - start) / 1000;
-              }
-            }
-            return acc + (r.stepsTotal || 1) * 8;
-          }, 0) / totalCount
-        ).toFixed(1)
-      : "0.0";
-
-  const selectedReport = results.find((r) => r.id === selectedReportId);
-
-  // Helper to trigger a fresh report (simulate adding one for developer quick verification)
-  const handleSimulateNewReport = async () => {
-    const newId = `res_${crypto.randomUUID()}`;
-    const randomStatus =
-      Math.random() > 0.35 ? ("success" as const) : ("failed" as const);
-    const isHealed = randomStatus === "success" && Math.random() > 0.5;
-
-    const newReport: TestResult = {
-      id: newId,
-      testName: `完美世界绩效平台 - 自动导出 ${2020 + Math.floor(Math.random() * 7)} 年底绩效报表`,
-      testStatus: randomStatus,
-      task: `进入绩效管理平台，展开下拉菜单，选中年份，执行导出操作并拦截结果`,
-      createdAt: new Date().toISOString().replace("T", " ").substring(0, 19),
-      completedAt: new Date(Date.now() + 45000)
-        .toISOString()
-        .replace("T", " ")
-        .substring(0, 19),
-      stepsTotal: 6,
-      stepsSuccess:
-        randomStatus === "success" ? 6 : Math.floor(2 + Math.random() * 3),
-      reportMarkdown: `### 📊 模拟导出运行诊断报告 (${newId})\n\n- **执行意图**：展开绩效期间选择器，选中对应年份，点击“导出”按钮，校验下载状态。\n- **状态判定**：${randomStatus === "success" ? "✅ 执行通过，接口拦截到报表文件导出成功" : "❌ 任务失败，点击导出按钮时接口发生 500 服务器内部故障"}\n- **Healer自愈追踪**：${isHealed ? "🚑 **成功自愈 1 次**。检测到选项失焦折叠，Healer 启动智能按键流（ArrowDown + Enter）成功补救。" : "未触发重大故障干预。"}\n\n#### 📝 实时交互日志：\n1. \`click_period_select_combobox\` -> 展开“选择绩效期间”下拉框成功。\n2. \`select_target_year_option\` -> ${isHealed ? "检测到失焦收回，Healer 自愈引擎调用 ArrowDown 补救，成功选中目标年份！" : "在 teleport 浮层中精准点击目标年份，选中成功。"}\n3. \`verify_active_year_text\` -> 页面断言“当前选定期间”已刷新符合预期。\n4. \`click_export_report_button\` -> 精准点击“导出”按钮。\n5. \`intercept_api_export_response\` -> ${randomStatus === "success" ? "通过拦截接口取得流数据，导出状态码：200，导出成功。" : "🔴 拦截到服务端报错：500 服务器内部错误，重试 3 次后依旧无法连接，已自动限流中止任务。"}`,
-      duration: 45,
-    };
-
-    const updated = [newReport, ...results];
-    setResults(updated);
-    setSelectedReportId(newId);
-
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("save_reports_to_file", { data: JSON.stringify(updated) });
-    } catch (err) {
-      console.warn("save_reports_to_file failed, falling back to localStorage", err);
-      localStorage.setItem(scopedStorageKey("logicguard_test_results"), JSON.stringify(updated));
+  useEffect(() => {
+    if (!selectedRunId) {
+      setEvents([])
+      return
     }
-  };
+    void listWorkflowRunEvents(selectedRunId).then(setEvents).catch(() => setEvents([]))
+  }, [selectedRunId])
 
-  const handleClearReports = async () => {
-    if (window.confirm("确认清空所有的执行历史记录吗？")) {
-      setResults([]);
-      setSelectedReportId(null);
+  if (selectedRun) {
+    return <div className="flex h-full flex-1 flex-col overflow-hidden p-6"><header className="flex items-center justify-between border-b border-border pb-4"><div className="flex items-center gap-3"><button type="button" onClick={() => setSelectedRunId(null)} className="flex h-8 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-text-secondary hover:text-text-primary"><ArrowLeft className="h-3.5 w-3.5" />返回历史</button><div><h2 className="text-sm font-bold text-text-primary">{scenarioTitle.get(selectedRun.scenarioId) ?? '场景不可用'}</h2><p className="mt-1 text-[11px] text-text-muted">运行编号：{selectedRun.id}</p></div></div><button type="button" onClick={() => onNavigate?.('execution')} className="flex h-8 items-center gap-1.5 rounded-md bg-brand-500 px-3 text-xs font-semibold text-white hover:bg-brand-600"><ListChecks className="h-3.5 w-3.5" />进入执行中心</button></header><section className="mt-4 grid grid-cols-1 border border-border md:grid-cols-3"><div className="border-b border-border p-4 md:border-b-0 md:border-r"><p className="text-[11px] text-text-muted">当前状态</p><p className="mt-1 text-sm font-semibold text-text-primary">{STATUS_LABEL[selectedRun.status]}</p></div><div className="border-b border-border p-4 md:border-b-0 md:border-r"><p className="text-[11px] text-text-muted">当前步骤</p><p className="mt-1 text-sm font-semibold text-text-primary">第 {selectedRun.currentStepIndex || 0} 步</p></div><div className="p-4"><p className="text-[11px] text-text-muted">更新时间</p><p className="mt-1 text-sm font-semibold text-text-primary">{displayTime(selectedRun.updatedAt)}</p></div></section><section className="mt-4 min-h-0 flex-1 overflow-y-auto border border-border"><div className="border-b border-border px-4 py-3"><h3 className="text-sm font-bold text-text-primary">执行记录</h3></div>{events.length === 0 ? <p className="p-4 text-xs text-text-muted">暂无语义化执行记录。</p> : events.map(event => <div key={event.id} className="border-b border-border/70 px-4 py-3 last:border-b-0"><div className="flex items-center justify-between gap-3"><span className="text-xs font-semibold text-text-primary">{event.message}</span><time className="shrink-0 text-[11px] text-text-muted">{displayTime(event.occurredAt)}</time></div><p className="mt-1 text-[11px] text-text-muted">{event.role ? `测试角色：${event.role === 'employee' ? '员工' : event.role === 'manager' ? '上级' : 'HRBP'} · ` : ''}{event.phase}</p></div>)}</section></div>
+  }
 
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("save_reports_to_file", { data: "[]" });
-      } catch (err) {
-        console.warn("save_reports_to_file failed, falling back to localStorage", err);
-        localStorage.removeItem(scopedStorageKey("logicguard_test_results"));
-      }
-    }
-  };
+  return <div className="flex h-full flex-1 flex-col overflow-hidden p-6"><header className="flex shrink-0 flex-col gap-3 border-b border-border pb-4 xl:flex-row xl:items-end xl:justify-between"><div><h2 className="text-lg font-bold text-text-primary">执行历史</h2><p className="mt-1 text-xs text-text-muted">展示流程运行和语义化执行记录；历史兼容数据仅供只读查看。</p></div><button type="button" onClick={() => onNavigate?.('execution')} className="flex h-8 items-center gap-1.5 rounded-md bg-brand-500 px-3 text-xs font-semibold text-white hover:bg-brand-600"><ListChecks className="h-3.5 w-3.5" />进入执行中心</button></header><section className="flex shrink-0 flex-wrap items-end gap-3 border-b border-border py-3"><label className="grid min-w-52 flex-1 gap-1 text-[11px] text-text-muted">搜索运行<span className="relative"><Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-text-muted" /><input value={keyword} onChange={event => setKeyword(event.target.value)} placeholder="搜索场景或运行编号" className="h-8 w-full rounded-md border border-border bg-surface-2 pl-7 pr-2 text-xs text-text-primary" /></span></label><label className="grid gap-1 text-[11px] text-text-muted">状态<select aria-label="运行状态筛选" value={status} onChange={event => setStatus(event.target.value as 'all' | WorkflowRun['status'])} className="h-8 rounded-md border border-border bg-surface-2 px-2 text-xs text-text-primary"><option value="all">全部状态</option>{Object.entries(STATUS_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></section>{error ? <p role="alert" className="mt-4 text-xs text-error">{error}</p> : loading ? <p className="mt-4 text-xs text-text-muted">正在读取执行历史...</p> : <><section className="mt-4 min-h-0 flex-1 overflow-auto border border-border"><table className="w-full min-w-[760px] table-fixed text-left text-xs"><thead className="sticky top-0 bg-surface-2 text-[11px] text-text-muted"><tr><th className="w-[35%] px-4 py-2 font-medium">场景</th><th className="w-[16%] px-3 py-2 font-medium">状态</th><th className="w-[15%] px-3 py-2 font-medium">进度</th><th className="w-[24%] px-3 py-2 font-medium">更新时间</th><th className="px-3 py-2 font-medium">操作</th></tr></thead><tbody>{filteredRuns.length === 0 ? <tr><td colSpan={5} className="px-4 py-10 text-center text-text-muted">暂无匹配的流程运行记录。</td></tr> : filteredRuns.map(run => <tr key={run.id} className="border-t border-border/70 hover:bg-surface-2/40"><td className="truncate px-4 py-3 font-medium text-text-primary">{scenarioTitle.get(run.scenarioId) ?? '场景不可用'}</td><td className="px-3 py-3 text-text-secondary">{STATUS_LABEL[run.status]}</td><td className="px-3 py-3 text-text-secondary">第 {run.currentStepIndex || 0} 步</td><td className="px-3 py-3 text-[11px] text-text-muted">{displayTime(run.updatedAt)}</td><td className="px-3 py-3"><button type="button" onClick={() => setSelectedRunId(run.id)} className="text-xs font-semibold text-brand-400 hover:text-brand-300">查看记录</button></td></tr>)}</tbody></table></section><section className="mt-4 border-t border-border pt-4"><div className="flex items-center gap-2"><FileClock className="h-4 w-4 text-text-muted" /><h3 className="text-sm font-bold text-text-primary">历史兼容记录（只读）</h3></div>{legacyResults.length === 0 ? <p className="mt-2 text-xs text-text-muted">没有旧版本地记录。</p> : <div className="mt-2 divide-y divide-border border border-border">{legacyResults.slice(0, 8).map(result => <div key={result.id} className="flex items-center justify-between gap-4 px-3 py-2 text-xs"><span className="truncate text-text-secondary">{result.testName ?? result.task ?? result.id}</span><span className="shrink-0 text-[11px] text-text-muted"><Clock className="mr-1 inline h-3 w-3" />{displayTime(result.createdAt)}</span></div>)}</div>}</section></>}</div>
+}
 
-  return (
-    <div className="flex-1 flex flex-col h-full bg-transparent overflow-hidden p-6 space-y-6 animate-fade-in">
-      {!selectedReport ? (
-        <>
-          {/* Header with quick action tools */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 shrink-0">
-            <div>
-              <h2 className="text-lg font-bold text-text-primary flex items-center gap-2">
-                <BarChart3 className="w-5 h-5 text-brand-400" />
-                执行历史与测试报告
-              </h2>
-              <p className="text-xs text-text-muted">
-                汇总并分析所有的智能测试任务，集成自愈成功率与故障根因追踪
-              </p>
-            </div>
-            <div className="flex items-center gap-3 shrink-0">
-              <button
-                onClick={handleSimulateNewReport}
-                className="h-8.5 px-3 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/20 text-brand-400 text-xs font-semibold flex items-center gap-1.5 transition-all duration-200"
-                title="手动模拟生成一个新的诊断报告"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                模拟生成报告
-              </button>
-              {results.length > 0 && (
-                <button
-                  onClick={handleClearReports}
-                  className="h-8.5 px-3 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-400 text-xs font-semibold transition-all duration-200"
-                >
-                  清空记录
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Main stats layout */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
-            <div className="bg-surface-1 p-4.5 rounded-xl border border-border flex items-center gap-4 glow transition-all hover:border-brand-500/30">
-              <div className="w-10 h-10 rounded-lg bg-brand-500/10 flex items-center justify-center">
-                <Activity className="w-5 h-5 text-brand-400" />
-              </div>
-              <div>
-                <span className="text-[10px] text-text-muted font-bold block uppercase tracking-wider">
-                  总执行次数
-                </span>
-                <span className="text-lg font-bold text-text-primary mt-0.5 block">
-                  {totalCount} 次
-                </span>
-              </div>
-            </div>
-
-            <div className="bg-surface-1 p-4.5 rounded-xl border border-border flex items-center gap-4 glow transition-all hover:border-success/30">
-              <div className="w-10 h-10 rounded-lg bg-success/10 flex items-center justify-center">
-                <CheckCircle2 className="w-5 h-5 text-success animate-pulse" />
-              </div>
-              <div>
-                <span className="text-[10px] text-text-muted font-bold block uppercase tracking-wider">
-                  运行成功率
-                </span>
-                <span className="text-lg font-bold text-success mt-0.5 block">
-                  {successRate}%
-                </span>
-              </div>
-            </div>
-
-            <div className="bg-surface-1 p-4.5 rounded-xl border border-border flex items-center gap-4 glow transition-all hover:border-warning/30">
-              <div className="w-10 h-10 rounded-lg bg-warning/10 flex items-center justify-center">
-                <Clock className="w-5 h-5 text-warning" />
-              </div>
-              <div>
-                <span className="text-[10px] text-text-muted font-bold block uppercase tracking-wider">
-                  智能均值响应
-                </span>
-                <span className="text-lg font-bold text-warning mt-0.5 block">
-                  {avgResponseTime} 秒
-                </span>
-              </div>
-            </div>
-
-            <div className="bg-surface-1 p-4.5 rounded-xl border border-border flex items-center gap-4 glow transition-all hover:border-info/30">
-              <div className="w-10 h-10 rounded-lg bg-info/10 flex items-center justify-center">
-                <Zap className="w-5 h-5 text-info" />
-              </div>
-              <div>
-                <span className="text-[10px] text-text-muted font-bold block uppercase tracking-wider">
-                  Healer 自愈补救
-                </span>
-                <span className="text-lg font-bold text-info mt-0.5 block">
-                  {
-                    results.filter(
-                      (r) =>
-                        r.reportMarkdown?.includes("自愈") ||
-                        r.reportMarkdown?.includes("Healer"),
-                    ).length
-                  }{" "}
-                  次
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Full-width list of records */}
-          <div className="flex-1 bg-surface-1 rounded-xl border border-border overflow-hidden flex flex-col min-h-0 glow">
-            {/* List Toolbar */}
-            <div className="px-5 py-4 border-b border-border bg-surface-2/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-text-primary">
-                  任务执行记录
-                </span>
-                <span className="text-[10px] bg-surface-3 text-text-secondary px-1.5 py-0.5 rounded font-mono font-medium">
-                  {filteredResults.length} / {totalCount}
-                </span>
-              </div>
-
-              {/* Filter controls */}
-              <div className="flex items-center gap-2">
-                {/* Search Bar */}
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted" />
-                  <input
-                    type="text"
-                    placeholder="搜索报告名称或ID..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="h-8 pl-8 pr-3 rounded-lg bg-surface-2 text-xs text-text-primary border border-border focus:border-brand-500 outline-none w-40 sm:w-48 transition-all"
-                  />
-                </div>
-
-                {/* Status tabs */}
-                <div className="flex bg-surface-2 p-0.5 rounded-lg border border-border text-[10px] font-semibold shrink-0">
-                  <button
-                    onClick={() => setStatusFilter("all")}
-                    className={`px-2 py-1 rounded-md transition-colors ${statusFilter === "all" ? "bg-surface-0 text-text-primary shadow-sm" : "text-text-muted hover:text-text-primary"}`}
-                  >
-                    全部
-                  </button>
-                  <button
-                    onClick={() => setStatusFilter("success")}
-                    className={`px-2 py-1 rounded-md transition-colors ${statusFilter === "success" ? "bg-surface-0 text-success shadow-sm" : "text-text-muted hover:text-success"}`}
-                  >
-                    通过
-                  </button>
-                  <button
-                    onClick={() => setStatusFilter("failed")}
-                    className={`px-2 py-1 rounded-md transition-colors ${statusFilter === "failed" ? "bg-surface-0 text-error shadow-sm" : "text-text-muted hover:text-error"}`}
-                  >
-                    失败
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* List Content */}
-            <div className="flex-1 overflow-y-auto divide-y divide-border custom-scrollbar min-h-0">
-              {filteredResults.length > 0 ? (
-                filteredResults.map((r) => {
-                  const hasHealed =
-                    r.reportMarkdown?.includes("自愈") ||
-                    r.reportMarkdown?.includes("Healer");
-
-                  return (
-                    <div
-                      key={r.id}
-                      onClick={() => setSelectedReportId(r.id)}
-                      className="p-4.5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer transition-all duration-200 hover:bg-surface-2/20 border-l-2 border-l-transparent hover:border-l-brand-500"
-                    >
-                      <div className="flex items-start gap-4 min-w-0">
-                        {r.testStatus === "success" ? (
-                          <CheckCircle2 className="w-5 h-5 text-success mt-0.5 shrink-0" />
-                        ) : (
-                          <XCircle className="w-5 h-5 text-error mt-0.5 shrink-0" />
-                        )}
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <h4 className="text-xs font-bold text-text-primary truncate max-w-sm sm:max-w-md md:max-w-lg lg:max-w-xl">
-                              {r.testName}
-                            </h4>
-                            <span className="text-[9px] bg-surface-2 text-text-muted font-mono px-1.5 py-0.5 rounded border border-border/80 shrink-0">
-                              {r.id}
-                            </span>
-                            {hasHealed && (
-                              <span className="text-[8px] bg-amber-500/10 text-amber-400 font-mono px-1.5 py-0.5 rounded border border-amber-500/20 shrink-0 flex items-center gap-1">
-                                <Zap className="w-2 h-2 fill-current" /> 已自愈
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-[11px] text-text-secondary mt-1.5 truncate max-w-sm sm:max-w-xl md:max-w-2xl">
-                            {r.task}
-                          </p>
-                          <div className="flex items-center gap-3 text-[10px] text-text-muted mt-2.5">
-                            <span className="flex items-center gap-1 font-mono">
-                              <Clock className="w-3.5 h-3.5 shrink-0" />{" "}
-                              {r.createdAt}
-                            </span>
-                            <span>•</span>
-                            <span className="font-mono">
-                              步骤成功比例: {r.stepsSuccess} / {r.stepsTotal} 步
-                            </span>
-                            {r.duration !== undefined && (
-                              <>
-                                <span>•</span>
-                                <span className="font-mono text-warning">
-                                  耗时: {r.duration} 秒
-                                </span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Status & View button */}
-                      <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
-                        <span
-                          className={`text-[9px] uppercase tracking-wider px-2 py-0.5 rounded font-bold font-mono ${
-                            r.testStatus === "success"
-                              ? "bg-success/15 text-success"
-                              : "bg-error/15 text-error"
-                          }`}
-                        >
-                          {r.testStatus === "success" ? "???" : "??"}
-                        </span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedReportId(r.id);
-                          }}
-                          className="h-8 px-3 rounded-lg border border-border hover:border-brand-500/30 bg-surface-2 hover:bg-brand-500/5 text-xs font-semibold text-text-primary hover:text-brand-400 flex items-center gap-1.5 transition-all"
-                        >
-                          <FileText className="w-3.5 h-3.5" />
-                          详情
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center p-8 text-center text-text-muted italic space-y-2">
-                  <FileCheck className="w-8 h-8 text-surface-4" />
-                  <p className="text-xs">没有找到符合条件的执行记录。</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </>
-      ) : (
-        /* Full-page detailed report view */
-        <div className="flex-1 flex flex-col min-h-0 bg-surface-1 rounded-xl border border-border overflow-hidden glow animate-slide-in">
-          {/* Detail Header */}
-          <div className="px-6 py-4.5 border-b border-border bg-surface-2/30 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => setSelectedReportId(null)}
-                className="flex items-center gap-1.5 h-8.5 px-3 rounded-lg bg-surface-3 hover:bg-surface-4 border border-border text-text-primary text-xs font-semibold transition-all duration-200"
-              >
-                <ArrowLeft className="w-4 h-4 text-text-muted" />
-                返回记录列表
-              </button>
-              <div className="h-5 w-[1px] bg-border hidden sm:block" />
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-text-primary">
-                    执行诊断报告
-                  </span>
-                  <span className="text-[9px] bg-surface-3 text-text-secondary px-1.5 py-0.5 rounded font-mono border border-border">
-                    {selectedReport.id}
-                  </span>
-                </div>
-                <p className="text-[10px] text-text-muted mt-0.5 font-mono">
-                  {selectedReport.createdAt}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <span
-                className={`text-[9px] uppercase tracking-wider px-2 py-0.5 rounded font-bold font-mono ${
-                  selectedReport.testStatus === "success"
-                    ? "bg-success/15 text-success"
-                    : "bg-error/15 text-error"
-                }`}
-              >
-                {selectedReport.testStatus === "success" ? "???" : "??"}
-              </span>
-            </div>
-          </div>
-
-          {/* Detail scrollable info */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar min-h-0">
-            {/* Meta summary card */}
-            <div className="p-5 rounded-xl bg-surface-2 border border-border space-y-4">
-              <h4 className="text-sm font-bold text-text-primary">
-                {selectedReport.testName}
-              </h4>
-              <p className="text-xs text-text-secondary leading-relaxed bg-surface-1 p-3.5 rounded border border-border/80 font-medium">
-                🔍 执行目标: "{selectedReport.task}"
-              </p>
-
-              {(selectedReport.managementSummary || selectedReport.suiteName || selectedReport.caseName) && (
-                <div className="rounded-xl border border-brand-500/20 bg-brand-500/5 p-4 space-y-2">
-                  <div className="flex items-center gap-2 text-sm font-bold text-text-primary">
-                    <FileCheck className="w-4 h-4 text-brand-400" />
-                    部门管理摘要
-                  </div>
-                  <p className="text-xs text-text-secondary leading-relaxed">
-                    {selectedReport.managementSummary || '该报告来自测试用例/回归套件执行。'}
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
-                    <span className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-text-muted">
-                      套件：{selectedReport.suiteName || '未归属套件'}
-                    </span>
-                    <span className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-text-muted">
-                      用例：{selectedReport.caseName || selectedReport.testName}
-                    </span>
-                    <span className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-text-muted">
-                      发版建议：{selectedReport.releaseAdvice === 'block_release' ? '阻断发版' : selectedReport.releaseAdvice === 'review_required' ? '人工复核' : '可继续'}
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {/* Progress chart */}
-              <div className="space-y-2 pt-1">
-                <div className="flex items-center justify-between text-xs font-semibold text-text-secondary">
-                  <span>步骤成功比例</span>
-                  <span
-                    className={
-                      selectedReport.testStatus === "success"
-                        ? "text-success"
-                        : "text-error"
-                    }
-                  >
-                    {selectedReport.stepsSuccess} /{" "}
-                    {selectedReport.stepsTotal} (
-                    {Math.round(
-                      (selectedReport.stepsSuccess /
-                        selectedReport.stepsTotal) *
-                        100,
-                    )}
-                    %)
-                  </span>
-                </div>
-                <div className="w-full h-2.5 rounded-full bg-surface-3 overflow-hidden border border-border">
-                  <div
-                    className={`h-full rounded-full transition-all duration-500 ${
-                      selectedReport.testStatus === "success"
-                        ? "bg-success animate-pulse"
-                        : "bg-error"
-                    }`}
-                    style={{
-                      width: `${(selectedReport.stepsSuccess / selectedReport.stepsTotal) * 100}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Status Callout */}
-            <div
-              className={`p-4 rounded-xl border flex items-center justify-between gap-3 text-xs font-semibold ${
-                selectedReport.testStatus === "success"
-                  ? "bg-success/10 border-success/20 text-success"
-                  : "bg-error/10 border-error/20 text-error"
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                {selectedReport.testStatus === "success" ? (
-                  <CheckCircle2 className="w-4.5 h-4.5 shrink-0" />
-                ) : (
-                  <XCircle className="w-4.5 h-4.5 shrink-0" />
-                )}
-                <span>
-                  任务诊断判定:{" "}
-                  {selectedReport.testStatus === "success"
-                    ? "正常执行并通过断言"
-                    : "执行超时或流程断言失败"}
-                </span>
-              </div>
-              <span className="font-mono text-xs uppercase tracking-wider">
-                {selectedReport.testStatus}
-              </span>
-            </div>
-
-            {/* Report Markdown (Visual logs) */}
-            <div className="space-y-3 pt-1">
-              <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-brand-400" />
-                <h5 className="text-sm font-bold text-text-primary">
-                  测试流诊断分析 (Markdown)
-                </h5>
-              </div>
-              <div className="p-5 rounded-xl bg-surface-2 border border-border text-xs text-text-secondary leading-relaxed font-mono whitespace-pre-wrap select-text custom-markdown min-h-[250px] overflow-y-auto max-h-[600px] custom-scrollbar">
-                {selectedReport.reportMarkdown || "无可用日志报告。"}
-              </div>
-            </div>
-
-            {/* Re-run button */}
-            <div className="pt-2">
-              <button
-                onClick={() => {
-                  alert(
-                    `已成功复制任务意图到您的剪贴板！\n\n"${selectedReport.task}"\n\n您可前往“新建任务”面板直接粘贴重新执行。`,
-                  );
-                  navigator.clipboard.writeText(selectedReport.task);
-                }}
-                className="w-full h-11 rounded-lg bg-brand-500 hover:bg-brand-600 active:bg-brand-700 text-white font-medium text-xs flex items-center justify-center gap-2 shadow-sm transition-all duration-200"
-              >
-                <Play className="w-4 h-4" />
-                复制并重新运行此任务
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default Reports;
+export default Reports

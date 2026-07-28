@@ -5,6 +5,7 @@ import { TestCases } from './pages/TestCases';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import { ExecutionCenter } from './pages/ExecutionCenter';
+import { IssueTracker } from './pages/IssueTracker';
 import type { SystemStatus } from './types';
 import { getLlmConfig, isConfigured, testLlmConnection } from './api/llmBridge';
 import { checkBrowserConnection } from './api/browserBridge';
@@ -52,17 +53,19 @@ function AuthenticatedApp({ user }: { user: SessionUser }) {
   const renderActivePage = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard />;
+        return <Dashboard onNavigate={setActiveTab} />;
       case 'testdesign':
         return <TestCases />;
       case 'reports':
-        return <Reports />;
+        return <Reports onNavigate={setActiveTab} />;
       case 'execution':
         return <ExecutionCenter />;
+      case 'issues':
+        return <IssueTracker />;
       case 'settings':
         return <Settings status={status} setStatus={setStatus} currentUser={user} />;
       default:
-        return <Dashboard />;
+        return <Dashboard onNavigate={setActiveTab} />;
     }
   };
 
