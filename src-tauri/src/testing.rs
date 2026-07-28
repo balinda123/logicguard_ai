@@ -26,6 +26,17 @@ const NOT_CONFIGURED_MASK: &str = "not-configured";
 const MAX_LOGIN_URL_LENGTH: usize = 2048;
 const MAX_SELECTOR_LENGTH: usize = 512;
 const MAX_MASKED_LOGIN_NAME_LENGTH: usize = 64;
+const WORKFLOW_EVENT_PHASES: &[&str] = &[
+    "session_started",
+    "login_started",
+    "step_started",
+    "step_completed",
+    "assertion_passed",
+    "assertion_failed",
+    "handoff_required",
+    "execution_blocked",
+    "run_completed",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -249,13 +260,26 @@ fn has_sensitive_value_after_marker(value: &str, marker: &str) -> bool {
     let normalized = value.to_ascii_lowercase();
     normalized.match_indices(marker).any(|(index, _)| {
         let before = normalized[..index].chars().next_back();
-        let after = normalized[index + marker.len()..].trim_start();
+        let after = &normalized[index + marker.len()..];
         let marker_is_word = before
             .map(|character| character.is_ascii_alphanumeric() || character == '_')
             .unwrap_or(false);
-        !marker_is_word
-            && (after.starts_with('=') || after.starts_with(':'))
-            && !after[1..].trim().is_empty()
+        if marker_is_word {
+            return false;
+        }
+        if after.starts_with('=') || after.starts_with(':') {
+            return !after[1..].trim().is_empty();
+        }
+        if after.chars().next().is_some_and(char::is_whitespace) {
+            let next_word = after.trim().split_whitespace().next().unwrap_or_default();
+            return !next_word.is_empty()
+                && ![
+                    "field", "fields", "display", "error", "missing", "invalid", "failed",
+                    "required",
+                ]
+                .contains(&next_word);
+        }
+        false
     })
 }
 
@@ -271,19 +295,11 @@ fn contains_sensitive_persisted_value(value: &str) -> bool {
         "api-key",
         "api_key",
         "secret",
+        "authorization",
+        "bearer",
     ]
     .iter()
     .any(|marker| has_sensitive_value_after_marker(value, marker))
-        || value
-            .to_ascii_lowercase()
-            .split_whitespace()
-            .any(|word| word == "bearer")
-            && value
-                .to_ascii_lowercase()
-                .split_whitespace()
-                .skip_while(|word| *word != "bearer")
-                .nth(1)
-                .is_some()
 }
 
 fn validate_persisted_text(value: &str, field: &str) -> Result<(), String> {
@@ -310,6 +326,24 @@ fn validate_screenshot_path(value: &Option<String>) -> Result<(), String> {
         return Err("INVALID_SCREENSHOT_PATH".to_string());
     }
     Ok(())
+}
+
+fn validate_workflow_event_phase(value: &str) -> Result<(), String> {
+    validate_persisted_text(value, "WORKFLOW_EVENT_PHASE")?;
+    allowed(value, WORKFLOW_EVENT_PHASES, "WORKFLOW_EVENT_PHASE")
+}
+
+fn validate_stable_step_id(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+    {
+        Err("INVALID_STEP_ID".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 fn allowed(value: &str, values: &[&str], field: &str) -> Result<(), String> {
@@ -1077,7 +1111,7 @@ pub(crate) fn append_workflow_run_event_record(
     owner_id: &str,
     input: &AppendWorkflowRunEventInput,
 ) -> Result<WorkflowRunEvent, String> {
-    required(&input.phase, "PHASE")?;
+    validate_workflow_event_phase(&input.phase)?;
     required(&input.message, "MESSAGE")?;
     validate_persisted_text(&input.message, "WORKFLOW_EVENT_MESSAGE")?;
     validate_optional_role(&input.business_role)?;
@@ -1151,7 +1185,7 @@ fn validate_failure_evidence_input(
     input: &SaveFailureEvidenceInput,
 ) -> Result<(), String> {
     get_workflow_run(conn, owner_id, &input.run_id)?;
-    required(&input.step_id, "STEP_ID")?;
+    validate_stable_step_id(&input.step_id)?;
     required(&input.expected_value, "EXPECTED_VALUE")?;
     required(&input.actual_value, "ACTUAL_VALUE")?;
     validate_persisted_text(&input.expected_value, "EXPECTED_VALUE")?;

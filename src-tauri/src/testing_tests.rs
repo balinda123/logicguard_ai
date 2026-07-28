@@ -382,7 +382,7 @@ fn owner_scoping_prevents_cross_owner_reads_updates_and_deletes() {
         "owner-b",
         &AppendWorkflowRunEventInput {
             run_id: run.id.clone(),
-            phase: "action".to_string(),
+            phase: "step_started".to_string(),
             business_role: Some("employee".to_string()),
             message: "unauthorized".to_string(),
         },
@@ -439,7 +439,7 @@ fn events_receive_monotonically_increasing_sequence_numbers() {
         "owner-a",
         &AppendWorkflowRunEventInput {
             run_id: run.id.clone(),
-            phase: "login".to_string(),
+            phase: "login_started".to_string(),
             business_role: Some("employee".to_string()),
             message: "signed in".to_string(),
         },
@@ -450,7 +450,7 @@ fn events_receive_monotonically_increasing_sequence_numbers() {
         "owner-a",
         &AppendWorkflowRunEventInput {
             run_id: run.id.clone(),
-            phase: "assertion".to_string(),
+            phase: "assertion_passed".to_string(),
             business_role: None,
             message: "check passed".to_string(),
         },
@@ -503,7 +503,7 @@ fn rejects_sensitive_values_before_events_evidence_and_defects_reach_sqlite() {
         "owner-a",
         &AppendWorkflowRunEventInput {
             run_id: run.id.clone(),
-            phase: "assertion".to_string(),
+            phase: "assertion_passed".to_string(),
             business_role: Some("employee".to_string()),
             message: "password field display error".to_string(),
         },
@@ -514,9 +514,34 @@ fn rejects_sensitive_values_before_events_evidence_and_defects_reach_sqlite() {
         "owner-a",
         &AppendWorkflowRunEventInput {
             run_id: run.id.clone(),
-            phase: "assertion".to_string(),
+            phase: "assertion_failed".to_string(),
             business_role: Some("employee".to_string()),
             message: "password=real-secret".to_string(),
+        },
+    )
+    .is_err());
+
+    for phase in ["custom_phase", "token=secret"] {
+        assert!(testing::append_workflow_run_event_record(
+            &mut conn,
+            "owner-a",
+            &AppendWorkflowRunEventInput {
+                run_id: run.id.clone(),
+                phase: phase.to_string(),
+                business_role: Some("employee".to_string()),
+                message: "validation failed".to_string(),
+            },
+        )
+        .is_err());
+    }
+    assert!(testing::append_workflow_run_event_record(
+        &mut conn,
+        "owner-a",
+        &AppendWorkflowRunEventInput {
+            run_id: run.id.clone(),
+            phase: "assertion_failed".to_string(),
+            business_role: Some("employee".to_string()),
+            message: "password real-secret".to_string(),
         },
     )
     .is_err());
@@ -524,6 +549,7 @@ fn rejects_sensitive_values_before_events_evidence_and_defects_reach_sqlite() {
     for (expected_value, actual_value, screenshot_path) in [
         ("password=real-secret", "validation failed", None),
         ("validation failed", "Bearer abc", None),
+        ("otp 123456", "authorization abc", None),
         (
             "validation failed",
             "validation failed",
@@ -544,6 +570,19 @@ fn rejects_sensitive_values_before_events_evidence_and_defects_reach_sqlite() {
         )
         .is_err());
     }
+    assert!(testing::save_failure_evidence_record(
+        &conn,
+        "owner-a",
+        &SaveFailureEvidenceInput {
+            id: None,
+            run_id: run.id.clone(),
+            step_id: "token=secret".to_string(),
+            expected_value: "validation failed".to_string(),
+            actual_value: "validation failed".to_string(),
+            screenshot_path: None,
+        },
+    )
+    .is_err());
 
     for malicious_draft in [
         SaveDefectDraftInput {
@@ -580,6 +619,25 @@ fn rejects_sensitive_values_before_events_evidence_and_defects_reach_sqlite() {
         .unwrap_or_default();
     assert!(!stored_event.contains("password=real-secret"));
     assert!(!stored_event.contains("Bearer abc"));
+    assert!(!stored_event.contains("password real-secret"));
+    let stored_phase: String = conn
+        .query_row(
+            "SELECT group_concat(phase, '|') FROM workflow_events",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .unwrap()
+        .unwrap_or_default();
+    assert_eq!(stored_phase, "assertion_passed");
+    let stored_step_id: String = conn
+        .query_row(
+            "SELECT group_concat(step_id, '|') FROM failure_evidence",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .unwrap()
+        .unwrap_or_default();
+    assert!(!stored_step_id.contains("token=secret"));
     for table in ["failure_evidence", "defect_drafts"] {
         let count: i64 = conn
             .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
