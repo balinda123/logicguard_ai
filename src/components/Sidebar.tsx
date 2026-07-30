@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, BarChart2, Settings, Terminal, ShieldAlert, Cpu, ClipboardList } from 'lucide-react';
+import { LayoutDashboard, BarChart2, Settings, Terminal, ShieldAlert, Cpu, ClipboardList, ListChecks, Bug } from 'lucide-react';
 import type { SystemStatus } from '../types';
 
 interface SidebarProps {
@@ -10,9 +10,11 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, status }) => {
   const menuItems = [
+    { id: 'execution', label: '执行中心', icon: ListChecks },
     { id: 'dashboard', label: '任务控制台', icon: LayoutDashboard },
     { id: 'testdesign', label: '测试设计', icon: ClipboardList },
     { id: 'reports', label: '测试报告', icon: BarChart2 },
+    { id: 'issues', label: '问题跟踪', icon: Bug },
     { id: 'settings', label: '系统设置', icon: Settings },
   ];
 

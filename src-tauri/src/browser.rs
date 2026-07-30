@@ -67,6 +67,37 @@ pub struct ActionResult {
     pub final_url: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailureScreenshotResult {
+    pub screenshot_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SafeLoginResult {
+    status: String,
+    final_url: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserLoginPayload {
+    login_url: String,
+    page_selector: Option<String>,
+    username_selector: String,
+    password_selector: String,
+    submit_selector: String,
+    success_selector: Option<String>,
+    username: String,
+    password: String,
+}
+
+enum TestAccountLoginOutcome {
+    Completed { final_url: String },
+    ManualHandoffRequired,
+}
+
 // Sidecar 返回的通用响应格式
 #[derive(Debug, Deserialize)]
 struct SidecarResponse<T> {
@@ -184,6 +215,65 @@ fn run_sidecar_with_config(args: Vec<String>, config: Option<LlmConfig>) -> Resu
     run_sidecar(args, envs)
 }
 
+fn validate_failure_evidence_id(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        Err("INVALID_FAILURE_EVIDENCE_ID".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn required_login_selector(value: Option<String>) -> Result<String, String> {
+    value.ok_or_else(|| "AUTOMATIC_LOGIN_CONFIG_INCOMPLETE".to_string())
+}
+
+fn login_test_account(
+    app: &tauri::AppHandle,
+    account_id: &str,
+    port: Option<u16>,
+) -> Result<TestAccountLoginOutcome, String> {
+    let login = match crate::testing::load_automatic_login(app, account_id) {
+        Ok(login) => login,
+        Err(error) if error == "MANUAL_HANDOFF_REQUIRED" => {
+            return Ok(TestAccountLoginOutcome::ManualHandoffRequired)
+        }
+        Err(_) => return Err("TEST_ACCOUNT_LOGIN_UNAVAILABLE".to_string()),
+    };
+    let payload = BrowserLoginPayload {
+        login_url: login.login_config.login_url,
+        page_selector: login.login_config.page_selector,
+        username_selector: required_login_selector(login.login_config.username_selector)?,
+        password_selector: required_login_selector(login.login_config.password_selector)?,
+        submit_selector: required_login_selector(login.login_config.submit_selector)?,
+        success_selector: login.login_config.success_selector,
+        username: login.credential.username,
+        password: login.credential.password,
+    };
+    let serialized_payload = serde_json::to_string(&payload)
+        .map_err(|_| "TEST_ACCOUNT_LOGIN_UNAVAILABLE".to_string())?;
+    let raw = run_sidecar(
+        vec![
+            "login_with_credentials".to_string(),
+            format!("--port={}", port.unwrap_or(9222)),
+        ],
+        vec![("LG_BROWSER_LOGIN_PAYLOAD".to_string(), serialized_payload)],
+    )
+    .map_err(|_| "TEST_ACCOUNT_LOGIN_FAILED".to_string())?;
+    let result = parse_response::<SafeLoginResult>(&raw)
+        .map_err(|_| "TEST_ACCOUNT_LOGIN_FAILED".to_string())?;
+    if result.status != "completed" {
+        return Err("TEST_ACCOUNT_LOGIN_FAILED".to_string());
+    }
+    Ok(TestAccountLoginOutcome::Completed {
+        final_url: result.final_url,
+    })
+}
+
 // ─── 解析 Sidecar 响应 ────────────────────────────────────────
 fn parse_response<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<T, String> {
     // 🌟 容错处理：从多行输出中寻找到真正的 JSON 响应行（兼容 Stagehand / Playwright 打印的背景日志）
@@ -211,6 +301,32 @@ fn parse_response<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<T, String> 
 
 /// 获取当前 Chrome 页面快照
 /// 📚 前端调用: await invoke('browser_get_snapshot', { port: 9222 })
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestAccountLoginResult {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_url: Option<String>,
+}
+
+#[command]
+pub fn browser_login_test_account(
+    app: tauri::AppHandle,
+    account_id: String,
+    port: Option<u16>,
+) -> Result<TestAccountLoginResult, String> {
+    match login_test_account(&app, &account_id, port)? {
+        TestAccountLoginOutcome::Completed { final_url } => Ok(TestAccountLoginResult {
+            status: "completed".to_string(),
+            final_url: Some(final_url),
+        }),
+        TestAccountLoginOutcome::ManualHandoffRequired => Ok(TestAccountLoginResult {
+            status: "manual_handoff_required".to_string(),
+            final_url: None,
+        }),
+    }
+}
+
 #[command]
 pub fn browser_get_snapshot(port: Option<u16>, config: Option<LlmConfig>) -> Result<PageSnapshot, String> {
     let cdp_port = port.unwrap_or(9222).to_string();
@@ -398,6 +514,61 @@ pub fn browser_assert(selector: String, contains: Option<String>, port: Option<u
 /// 检查 Chrome CDP 连接状态
 /// 📚 前端调用: await invoke('browser_check_connection')
 ///    用于 Header 里的"穿透网关"状态灯
+#[command]
+pub fn browser_clear_session(port: Option<u16>) -> Result<(), String> {
+    run_sidecar(
+        vec![
+            "clear_session".to_string(),
+            format!("--port={}", port.unwrap_or(9222)),
+        ],
+        Vec::new(),
+    )
+    .and_then(|raw| parse_response::<serde_json::Value>(&raw).map(|_| ()))
+    .map_err(|_| "BROWSER_SESSION_CLEAR_FAILED".to_string())
+}
+
+#[command]
+pub fn browser_capture_failure_screenshot(
+    app: tauri::AppHandle,
+    run_id: String,
+    step_id: String,
+    port: Option<u16>,
+) -> Result<FailureScreenshotResult, String> {
+    crate::auth::current_user()?;
+    validate_failure_evidence_id(&run_id)?;
+    validate_failure_evidence_id(&step_id)?;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "FAILURE_EVIDENCE_DIRECTORY_UNAVAILABLE".to_string())?
+        .join("failure-evidence")
+        .join(&run_id);
+    std::fs::create_dir_all(&base)
+        .map_err(|_| "FAILURE_EVIDENCE_DIRECTORY_UNAVAILABLE".to_string())?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "FAILURE_EVIDENCE_TIMESTAMP_UNAVAILABLE".to_string())?
+        .as_millis();
+    let file_name = format!("{step_id}-{timestamp}.png");
+    let output = base.join(&file_name);
+    let output_string = output
+        .to_str()
+        .ok_or_else(|| "FAILURE_EVIDENCE_PATH_UNAVAILABLE".to_string())?
+        .to_string();
+    run_sidecar(
+        vec![
+            "capture_failure_screenshot".to_string(),
+            format!("--port={}", port.unwrap_or(9222)),
+        ],
+        vec![("LG_FAILURE_SCREENSHOT_PATH".to_string(), output_string)],
+    )
+    .and_then(|raw| parse_response::<serde_json::Value>(&raw).map(|_| ()))
+    .map_err(|_| "FAILURE_SCREENSHOT_CAPTURE_FAILED".to_string())?;
+    Ok(FailureScreenshotResult {
+        screenshot_path: format!("failure-evidence/{run_id}/{file_name}"),
+    })
+}
+
 #[command]
 pub fn browser_check_connection(port: Option<u16>) -> Result<bool, String> {
     let cdp_port = port.unwrap_or(9222);

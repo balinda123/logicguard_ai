@@ -20,6 +20,13 @@
 const { chromium } = require('playwright');
 const { JSDOM } = require('jsdom');
 const { Readability } = require('@mozilla/readability');
+const {
+  captureFailureScreenshot,
+  clearBrowserSession,
+  loginWithCredentials,
+  parseBrowserLoginPayload,
+  safeScreenshotPath,
+} = require('./session');
 
 // 全局共享 page 引用，用于在进程退出时清理虚拟光标
 let globalPage = null;
@@ -323,6 +330,29 @@ async function main() {
   // ─── 执行具体命令 ─────────────────────────────────────────────
   try {
     switch (command) {
+      case 'clear_session': {
+        await clearBrowserSession(contexts[0], page);
+        ok({ action: 'clear_session', cleared: true });
+        break;
+      }
+
+      case 'capture_failure_screenshot': {
+        const outputPath = safeScreenshotPath(process.env.LG_FAILURE_SCREENSHOT_PATH);
+        await captureFailureScreenshot(page, outputPath);
+        ok({ action: 'capture_failure_screenshot', captured: true });
+        break;
+      }
+
+      case 'login_with_credentials': {
+        try {
+          const payload = parseBrowserLoginPayload(process.env.LG_BROWSER_LOGIN_PAYLOAD);
+          const result = await loginWithCredentials(page, payload);
+          ok({ action: 'login_with_credentials', ...result });
+        } catch {
+          fail('CREDENTIAL_LOGIN_FAILED');
+        }
+        break;
+      }
 
       // 📄 读取页面纯文本内容（用于需求文档解析，不调用AI，零token消耗）
       // 支持 keyword 参数做段落级过滤，只返回包含关键词的段落

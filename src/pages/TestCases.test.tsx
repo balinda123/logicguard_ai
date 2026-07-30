@@ -13,6 +13,7 @@ import {
   upsertTestCase,
 } from '../api/testCaseStore'
 import { loadCustomTemplates } from '../api/templateGenerator'
+import { listWorkflowScenarios, saveWorkflowScenario } from '../api/testingBridge'
 import { TestCases } from './TestCases'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
@@ -29,6 +30,10 @@ vi.mock('../api/testCaseStore', () => ({
   upsertTestCase: vi.fn(),
 }))
 vi.mock('../api/templateGenerator', () => ({ loadCustomTemplates: vi.fn() }))
+vi.mock('../api/testingBridge', () => ({
+  listWorkflowScenarios: vi.fn(),
+  saveWorkflowScenario: vi.fn(),
+}))
 vi.mock('../agents/scriptGenerator', () => ({ generateTestScript: vi.fn() }))
 vi.mock('../agents/scriptExecutor', () => ({ executeTestScript: vi.fn() }))
 vi.mock('../utils/privacy', () => ({
@@ -90,6 +95,7 @@ const loadCasesMock = vi.mocked(loadTestCases)
 const loadSuitesMock = vi.mocked(loadSuites)
 const loadTemplatesMock = vi.mocked(loadCustomTemplates)
 const upsertCaseMock = vi.mocked(upsertTestCase)
+const listWorkflowScenariosMock = vi.mocked(listWorkflowScenarios)
 
 function rail(step: number, title: string) {
   return screen.getByRole('button', { name: new RegExp(`^${step}.*${title}`) })
@@ -131,6 +137,8 @@ describe('TestCases wizard', () => {
     vi.mocked(createDefaultSuite).mockReturnValue(suite)
     vi.mocked(upsertSuite).mockImplementation(value => [value])
     upsertCaseMock.mockImplementation(value => [value])
+    listWorkflowScenariosMock.mockResolvedValue([])
+    vi.mocked(saveWorkflowScenario).mockImplementation(async scenario => scenario)
   })
 
   it('keeps step 2 locked until a requirement source is entered', async () => {
@@ -285,6 +293,22 @@ describe('TestCases wizard', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('未生成任何测试用例')
     expect(screen.getByRole('heading', { name: '生成用例' })).toBeVisible()
     expect(rail(3, '检查确认')).toBeDisabled()
+  })
+
+  it('only offers workflow conversion after the legacy case is confirmed', async () => {
+    loadCasesMock.mockReturnValue([draftCase])
+    render(<TestCases />)
+    const user = userEvent.setup()
+
+    const reviewRail = screen.getAllByRole('button').find(button => button.getAttribute('aria-label')?.startsWith('3 '))
+    if (!reviewRail) throw new Error('review rail is missing')
+    await user.click(reviewRail)
+    expect(screen.queryByRole('button', { name: /\u8f6c\u4e3a\u6d41\u7a0b\u573a\u666f/ })).not.toBeInTheDocument()
+
+    const confirmButton = screen.getAllByRole('button').find(button => button.textContent?.includes('\u4eba\u5de5\u786e\u8ba4'))
+    if (!confirmButton) throw new Error('confirmation button is missing')
+    await user.click(confirmButton)
+    expect(screen.getByRole('button', { name: /\u8f6c\u4e3a\u6d41\u7a0b\u573a\u666f/ })).toBeVisible()
   })
 
   it('opens persisted drafts in review and unlocks persisted confirmed cases after review is entered', async () => {

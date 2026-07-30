@@ -29,6 +29,8 @@ import { executeTestScript } from '../agents/scriptExecutor';
 import { maskSensitiveText, securityModeLabel, getDataSecurityConfig } from '../utils/privacy';
 import { RequirementModeler } from './RequirementModeler';
 import { clampTestDesignStep, highestUnlockedTestDesignStep, type TestDesignStep } from './testDesignWizard';
+import { ScenarioConversionDialog } from '../components/ScenarioConversionDialog';
+import { listWorkflowScenarios } from '../api/testingBridge';
 
 const TYPE_LABEL: Record<TestCase['type'], string> = {
   normal: '正常流程',
@@ -174,6 +176,8 @@ export const TestCases: React.FC = () => {
   const [generatedRevision, setGeneratedRevision] = useState<number | null>(null);
   const [reviewReached, setReviewReached] = useState(false);
   const [generationNotice, setGenerationNotice] = useState<string | null>(null);
+  const [convertedCaseIds, setConvertedCaseIds] = useState<Set<string>>(() => new Set());
+  const [conversionCase, setConversionCase] = useState<TestCase | null>(null);
   const requirementRevisionRef = useRef(0);
 
   useEffect(() => {
@@ -191,6 +195,9 @@ export const TestCases: React.FC = () => {
       ),
     ];
     setTemplates(mergedTemplates);
+    void listWorkflowScenarios()
+      .then((scenarios) => setConvertedCaseIds(new Set(scenarios.map((scenario) => scenario.sourceTestCaseId).filter(Boolean))))
+      .catch(() => setConvertedCaseIds(new Set()));
   }, []);
 
   const selectedSuite = useMemo(
@@ -343,6 +350,11 @@ export const TestCases: React.FC = () => {
     setCases(upsertTestCase(updated));
   };
 
+  const handleScenarioSaved = (scenarioId: string) => {
+    setConvertedCaseIds((current) => new Set(current).add(scenarioId));
+    setConversionCase(null);
+  };
+
   const handleCreateSuite = () => {
     const suite = createDefaultSuite(moduleName || '人事核心流程');
     const next = upsertSuite(suite);
@@ -449,6 +461,11 @@ export const TestCases: React.FC = () => {
             <span className={`rounded-md border px-2 py-0.5 text-[10px] ${testCase.status === 'confirmed' ? 'border-success/20 bg-success/10 text-success' : 'border-warning/20 bg-warning/10 text-warning'}`}>
               {STATUS_LABEL[testCase.status]}
             </span>
+            {testCase.status === 'confirmed' && (
+              <span className={`rounded-md border px-2 py-0.5 text-[10px] ${convertedCaseIds.has(testCase.id) ? 'border-brand-500/20 bg-brand-500/10 text-brand-400' : 'border-border bg-surface-3 text-text-muted'}`}>
+                {convertedCaseIds.has(testCase.id) ? '已转为流程场景' : '未转为流程场景'}
+              </span>
+            )}
           </div>
           <h4 className="text-sm font-bold leading-snug text-text-primary">{testCase.title}</h4>
           <p className="mt-1 text-[11px] text-text-muted">{testCase.module} · {testCase.requirementTitle}</p>
@@ -473,6 +490,11 @@ export const TestCases: React.FC = () => {
         {!executionActions && testCase.status === 'draft' && (
           <button onClick={() => handleConfirm(testCase)} className="h-8 rounded-lg bg-brand-500 px-3 text-xs font-semibold text-white hover:bg-brand-600">
             人工确认
+          </button>
+        )}
+        {testCase.status === 'confirmed' && (
+          <button type="button" onClick={() => setConversionCase(testCase)} className="h-8 rounded-lg border border-brand-500/20 bg-brand-500/10 px-3 text-xs font-semibold text-brand-400 hover:bg-brand-500/15">
+            转为流程场景
           </button>
         )}
         {executionActions && (
@@ -594,6 +616,7 @@ export const TestCases: React.FC = () => {
           {step > 1 && <footer className="flex justify-start border-t border-border pt-4"><button type="button" disabled={generating} onClick={() => requestStep((step - 1) as TestDesignStep)} className="h-9 rounded-lg border border-border bg-surface-2 px-4 text-xs font-semibold text-text-secondary hover:text-text-primary disabled:opacity-40">上一步</button></footer>}
         </section>
       </div>
+      {conversionCase && <ScenarioConversionDialog testCase={conversionCase} onClose={() => setConversionCase(null)} onSaved={(scenario) => handleScenarioSaved(scenario.sourceTestCaseId)} />}
     </div>
   );
 };

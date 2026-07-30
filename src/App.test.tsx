@@ -13,4 +13,14 @@ describe('App routes', () => {
     expect(appSource).toContain("case 'testdesign'");
     expect(appSource).toMatch(/case 'testdesign':\s*return <TestCases \/>/);
   });
+
+  it('routes the execution center without changing existing pages', () => {
+    expect(appSource).toContain("case 'execution'");
+    expect(appSource).toMatch(/case 'execution':\s*return <ExecutionCenter \/>/);
+  });
+
+  it('routes the developer-facing issue tracker', () => {
+    expect(appSource).toContain("case 'issues'");
+    expect(appSource).toContain('<IssueTracker');
+  });
 });
