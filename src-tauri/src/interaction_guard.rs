@@ -147,7 +147,7 @@ mod platform {
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnableWindow, EnumWindows, GetWindowThreadProcessId, IsWindow, IsWindowEnabled,
-        IsWindowVisible,
+        IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
     };
 
     #[derive(Clone, Copy)]
@@ -202,6 +202,13 @@ mod platform {
     pub(crate) fn guard() -> Arc<dyn super::InteractionGuard> {
         Arc::new(PidWindowGuard::new(WindowsApi))
     }
+
+    pub(crate) fn focus(pid: u32) -> Result<(), String> {
+        let window = WindowsApi.top_level_windows(pid)?.into_iter().next().ok_or_else(|| LOCK_UNAVAILABLE.to_string())? as HWND;
+        unsafe { ShowWindow(window, SW_RESTORE); }
+        if unsafe { SetForegroundWindow(window) } == 0 { return Err(LOCK_UNAVAILABLE.to_string()); }
+        Ok(())
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -232,4 +239,11 @@ pub fn platform_guard() -> Arc<dyn InteractionGuard> {
     {
         Arc::new(UnsupportedGuard)
     }
+}
+
+pub fn focus_browser_window(browser_pid: u32) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    { platform::focus(browser_pid) }
+    #[cfg(not(target_os = "windows"))]
+    { let _ = browser_pid; Err(LOCK_UNAVAILABLE.to_string()) }
 }

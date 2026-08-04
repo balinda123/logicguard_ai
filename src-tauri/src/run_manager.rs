@@ -339,6 +339,17 @@ impl RunManager {
     pub fn terminate(&self,id:&str)->Result<ExecutionRun,String>{let run=self.owned(id)?;if run.status.is_terminal(){return Ok(run)};if matches!(run.status,RunStatus::Queued|RunStatus::Paused|RunStatus::WaitingHandoff){return self.transition(id,RunStatus::Cancelled,Some("cancelled"),Some("Terminated by user"));}if let Ok(control)=self.control(id){if let Ok(mut value)=control.state.lock(){value.cancel();}control.cancelled.notify_one();}Ok(run)}
 }
 
+#[tauri::command]
+pub fn focus_run_browser(state: tauri::State<'_, RunManager>, run_id: String) -> Result<(), String> {
+    state.owned(&run_id)?;
+    let browser_pid = state.db()?.query_row(
+        "SELECT browser_pid FROM execution_runs WHERE id=?1",
+        [&run_id],
+        |row| row.get::<_, Option<u32>>(0),
+    ).map_err(|error| error.to_string())?.ok_or_else(|| crate::interaction_guard::LOCK_UNAVAILABLE.to_string())?;
+    crate::interaction_guard::focus_browser_window(browser_pid)
+}
+
 struct WorkerFailure{category:ErrorCategory,message:String}
 struct WorkerProcess{child:Child,stdin:tokio::process::ChildStdin,stdout:tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,stderr_task:tokio::task::JoinHandle<()>}
 impl WorkerProcess{

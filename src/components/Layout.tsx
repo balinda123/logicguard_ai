@@ -2,6 +2,7 @@ import React from 'react';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import type { SystemStatus } from '../types';
+import { ActiveRunBar } from './ActiveRunBar';
 
 interface LayoutProps {
   activeTab: string;
@@ -34,6 +35,8 @@ export const Layout: React.FC<LayoutProps> = ({
           isRefreshing={isRefreshing}
           onOpenSettings={() => setActiveTab('settings')}
         />
+
+        <ActiveRunBar onOpenExecution={() => setActiveTab('execution')} />
 
         {/* Content area */}
         <main className="flex-1 min-h-0 min-w-0 overflow-hidden relative bg-surface-1 rounded-2xl border border-border shadow-md flex flex-col">

@@ -31,6 +31,7 @@ export const startRun = (input: StartRunInput) => invoke<string>('start_run', { 
 export const pauseRun = async (runId: string) => mapRun(await invoke<RustRun>('pause_run', { runId }))
 export const resumeRun = async (runId: string) => mapRun(await invoke<RustRun>('resume_run', { runId }))
 export const terminateRun = async (runId: string) => mapRun(await invoke<RustRun>('terminate_run', { runId }))
+export const focusRunBrowser = (runId: string) => invoke<void>('focus_run_browser', { runId })
 export async function getRun(runId: string): Promise<ExecutionRun | undefined> {
   const run = await invoke<RustRun | null>('get_run', { runId })
   return run ? mapRun(run) : undefined

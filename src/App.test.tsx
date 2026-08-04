@@ -17,8 +17,12 @@ describe('App routes', () => {
 
   it('routes the execution center without changing existing pages', () => {
     expect(appSource).toContain("case 'execution'");
-    expect(appSource).toMatch(/case 'execution':\s*return <ExecutionCenter \/>/);
+    expect(appSource).toMatch(/case 'execution':\s*return <ExecutionCenter onNavigate=/);
   });
+
+  it('mounts persistent run state above page switching', () => {
+    expect(appSource).toContain('<ActiveRunProvider>')
+  })
 
   it('routes the developer-facing issue tracker', () => {
     expect(appSource).toContain("case 'issues'");

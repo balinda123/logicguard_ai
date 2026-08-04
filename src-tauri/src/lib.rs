@@ -114,6 +114,7 @@ pub fn run() {
             run_manager::list_runs,
             run_manager::list_active_runs,
             run_manager::list_run_events,
+            run_manager::focus_run_browser,
             storage::get_storage_locations,
             storage::open_app_data_dir,
             // LLM 大模型相关命令
