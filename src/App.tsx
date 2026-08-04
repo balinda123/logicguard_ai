@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
-import { TestCases } from './pages/TestCases';
+import { TestDesignPage } from './pages/TestDesignPage';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import { ExecutionCenter } from './pages/ExecutionCenter';
@@ -13,6 +13,7 @@ import { invoke } from '@tauri-apps/api/core';
 import './App.css';
 import { AuthGate } from './components/AuthGate';
 import type { SessionUser } from './api/auth';
+import { ActiveRunProvider } from './contexts/ActiveRunContext';
 
 function AuthenticatedApp({ user }: { user: SessionUser }) {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -55,13 +56,13 @@ function AuthenticatedApp({ user }: { user: SessionUser }) {
       case 'dashboard':
         return <Dashboard onNavigate={setActiveTab} />;
       case 'testdesign':
-        return <TestCases canManageAccounts={user.role === 'admin'} />;
+        return <TestDesignPage canManageAccounts={user.role === 'admin'} onNavigate={setActiveTab} />;
       case 'reports':
         return <Reports onNavigate={setActiveTab} />;
       case 'execution':
-        return <ExecutionCenter />;
+        return <ExecutionCenter onNavigate={setActiveTab} />;
       case 'issues':
-        return <IssueTracker />;
+        return <IssueTracker onNavigate={setActiveTab} />;
       case 'settings':
         return <Settings status={status} setStatus={setStatus} currentUser={user} />;
       default:
@@ -83,7 +84,7 @@ function AuthenticatedApp({ user }: { user: SessionUser }) {
 }
 
 function App() {
-  return <AuthGate>{(user) => <AuthenticatedApp user={user} />}</AuthGate>;
+  return <AuthGate>{(user) => <ActiveRunProvider><AuthenticatedApp user={user} /></ActiveRunProvider>}</AuthGate>;
 }
 
 export default App;

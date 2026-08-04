@@ -51,7 +51,7 @@ export function buildDefectRows(items: DefectExportItem[]): DefectExportRow[] {
     expectedResult: draft.expectedResult,
     actualResult: draft.actualResult,
     impact: draft.impact,
-    role: ROLE_LABEL[draft.role],
+    role: draft.role ? ROLE_LABEL[draft.role] : '未标记',
     scenarioId: draft.scenarioId,
     status: STATUS_LABEL[draft.status],
     createdAt: draft.createdAt,

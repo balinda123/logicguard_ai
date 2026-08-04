@@ -8,6 +8,8 @@ import { createUser, disableUser, getCredentialStatus, listUsers, resetUserPassw
 import { getCdpPort, setCdpPort as saveCdpPort } from '../api/browserBridge';
 import { getDataSecurityConfig, setDataSecurityConfig, securityModeLabel } from '../utils/privacy';
 import type { DataSecurityConfig, DataSecurityMode } from '../types';
+import { TestAccountsPanel } from '../components/TestAccountsPanel';
+import { SystemEnvironmentManager } from '../components/SystemEnvironmentManager';
 
 interface SettingsProps {
   status: SystemStatus;
@@ -243,6 +245,25 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
     return cfg;
   };
 
+  const handleDiscoverModels = async () => {
+    setDiscoveringModels(true);
+    setLlmTestMsg('');
+    try {
+      const cfg = await handleSaveLlmConfig(false);
+      const models = await listOpenAiCompatModels(cfg);
+      const next = { ...cfg, available_models: models };
+      setLlmConfig(next);
+      setLlmConfigState(next);
+      setLlmTestState('ok');
+      setLlmTestMsg(`已从网关读取 ${models.length} 个可用模型，请从模型名称下拉中选择后再测试。`);
+    } catch (reason) {
+      setLlmTestState('error');
+      setLlmTestMsg(String(reason));
+    } finally {
+      setDiscoveringModels(false);
+    }
+  };
+
   const handleTestLlm = async () => {
     setLlmTestState('testing');
     setLlmTestMsg('');
@@ -261,25 +282,6 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
       setStatus(prev => ({ ...prev, llm: 'connected' }));
     } else {
       setStatus(prev => ({ ...prev, llm: 'disconnected' }));
-    }
-  };
-
-  const handleDiscoverModels = async () => {
-    setDiscoveringModels(true);
-    setLlmTestMsg('');
-    try {
-      const cfg = await handleSaveLlmConfig(false);
-      const models = await listOpenAiCompatModels(cfg);
-      const next = { ...cfg, available_models: models };
-      setLlmConfig(next);
-      setLlmConfigState(next);
-      setLlmTestState('ok');
-      setLlmTestMsg(`已从网关读取 ${models.length} 个可用模型，请从模型名称下拉中选择后再测试。`);
-    } catch (reason) {
-      setLlmTestState('error');
-      setLlmTestMsg(String(reason));
-    } finally {
-      setDiscoveringModels(false);
     }
   };
 
@@ -652,6 +654,9 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
             卸载或升级前如果要保留账号、报告和浏览器登录态，请不要手动删除上面的应用数据目录；API Key 位于系统凭据库，需要在 Windows Credential Manager 或 macOS Keychain 中单独管理。
           </div>
         </div>
+
+        {currentUser.role === 'admin' && <SystemEnvironmentManager />}
+        {currentUser.role === 'admin' && <TestAccountsPanel canManage />}
 
         {currentUser.role === 'admin' && (
           <div className="p-5 rounded-xl border border-border bg-surface-1/70 space-y-4 glow col-span-full">

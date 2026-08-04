@@ -9,15 +9,20 @@ describe('App routes', () => {
     expect(appSource).not.toContain('./pages/Templates');
   });
 
-  it('routes test design to TestCases with the current user account-management permission', () => {
+  it('routes test design through the persisted system-scoped lifecycle', () => {
     expect(appSource).toContain("case 'testdesign'");
-    expect(appSource).toMatch(/case 'testdesign':\s*return <TestCases canManageAccounts=\{user\.role === 'admin'\} \/>/);
+    expect(appSource).toMatch(/case 'testdesign':\s*return <TestDesignPage/);
+    expect(appSource).toContain('onNavigate={setActiveTab}');
   });
 
   it('routes the execution center without changing existing pages', () => {
     expect(appSource).toContain("case 'execution'");
-    expect(appSource).toMatch(/case 'execution':\s*return <ExecutionCenter \/>/);
+    expect(appSource).toMatch(/case 'execution':\s*return <ExecutionCenter onNavigate=/);
   });
+
+  it('mounts persistent run state above page switching', () => {
+    expect(appSource).toContain('<ActiveRunProvider>')
+  })
 
   it('routes the developer-facing issue tracker', () => {
     expect(appSource).toContain("case 'issues'");

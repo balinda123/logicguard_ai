@@ -48,6 +48,7 @@ pub(crate) fn open_db(app: &tauri::AppHandle) -> Result<Connection, String> {
     )
     .map_err(|e| e.to_string())?;
     crate::testing::initialize_schema(&conn)?;
+    crate::test_design::initialize_schema(&conn)?;
     Ok(conn)
 }
 

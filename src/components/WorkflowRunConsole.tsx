@@ -1,128 +1,26 @@
-import { AlertTriangle, CheckCircle2, Clock3, ExternalLink, Loader2, PauseCircle, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Clock3, Pause, Play, Square, XCircle } from 'lucide-react'
 
-import type { DefectDraft, FailureEvidence, WorkflowRun, WorkflowRunEvent, WorkflowScenario } from '../types/workflow'
+import { eventMessage, runScope, RUN_STATUS_LABEL } from '../api/runPresentation'
+import { isTerminalRun, useActiveRuns } from '../contexts/ActiveRunContext'
 
-interface WorkflowRunConsoleProps {
-  run: WorkflowRun | null
-  scenario?: WorkflowScenario
-  events: WorkflowRunEvent[]
-  evidence?: FailureEvidence
-  defect?: DefectDraft
-  busy?: boolean
-  onResume: () => void
-  onCancel: () => void
-}
+export function WorkflowRunConsole({ runId, onBackToDesign }: { runId?: string; onBackToDesign?: (designId: string) => void }) {
+  const { runs, eventsByRun, pause, resume, terminate } = useActiveRuns()
+  const run = runs.find((item) => item.id === runId)
+  if (!run) return <section className="grid min-h-[360px] place-items-center border-l border-border bg-surface-1 p-6 text-center"><div><Clock3 className="mx-auto h-6 w-6 text-text-muted" /><p className="mt-3 text-xs text-text-muted">选择一条运行记录查看持久化事件</p></div></section>
 
-const ROLE_LABEL = {
-  employee: '员工',
-  manager: '上级',
-  hrbp: 'HRBP',
-} as const
-
-const STATUS_LABEL: Record<WorkflowRun['status'], string> = {
-  queued: '待开始',
-  running: '执行中',
-  waiting_handoff: '等待交接',
-  execution_blocked: '执行被阻断',
-  business_failed: '业务失败',
-  passed: '通过',
-  cancelled: '已取消',
-}
-
-function statusStyle(status: WorkflowRun['status']): string {
-  if (status === 'passed') return 'border-success/25 bg-success/10 text-success'
-  if (status === 'business_failed' || status === 'execution_blocked') return 'border-error/25 bg-error/10 text-error'
-  if (status === 'waiting_handoff') return 'border-warning/25 bg-warning/10 text-warning'
-  if (status === 'running') return 'border-brand-500/25 bg-brand-500/10 text-brand-400'
-  return 'border-border bg-surface-2 text-text-muted'
-}
-
-export function WorkflowRunConsole({
-  run,
-  scenario,
-  events,
-  evidence,
-  defect,
-  busy = false,
-  onResume,
-  onCancel,
-}: WorkflowRunConsoleProps) {
-  if (!run) {
-    return (
-      <section className="flex min-h-[360px] flex-col items-center justify-center border-l border-border bg-surface-1 p-6 text-center">
-        <Clock3 className="h-6 w-6 text-text-muted" />
-        <p className="mt-3 text-xs text-text-muted">选择一条运行记录查看流程时间线</p>
-      </section>
-    )
-  }
-
-  return (
-    <section className="flex min-h-[360px] flex-col border-l border-border bg-surface-1">
-      <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-bold text-text-primary">{scenario?.title ?? '流程运行'}</h3>
-          <p className="mt-1 text-[11px] text-text-muted">第 {run.currentStepIndex || 0} 步</p>
-        </div>
-        <span className={`shrink-0 rounded-md border px-2 py-1 text-[10px] font-semibold ${statusStyle(run.status)}`}>
-          {STATUS_LABEL[run.status]}
-        </span>
-      </div>
-
-      {run.status === 'waiting_handoff' && (
-        <div className="m-4 flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/10 p-3 text-xs text-warning">
-          <PauseCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <p className="font-semibold">请在浏览器完成 SSO/验证码后继续</p>
-            <div className="mt-2 flex gap-2">
-              <button type="button" onClick={onResume} disabled={busy} className="h-7 rounded-md bg-warning px-2.5 text-[11px] font-semibold text-surface-0 disabled:opacity-50">
-                {busy ? '处理中' : '继续流程'}
-              </button>
-              <button type="button" onClick={onCancel} disabled={busy} className="h-7 rounded-md border border-warning/30 px-2.5 text-[11px] font-semibold text-warning disabled:opacity-50">
-                取消流程
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {run.status === 'running' && (
-        <div className="mx-4 mt-4 flex items-center gap-2 rounded-lg border border-brand-500/20 bg-brand-500/5 px-3 py-2 text-[11px] text-brand-400">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> 正在执行当前步骤
-          <button type="button" onClick={onCancel} disabled={busy} className="ml-auto text-text-muted hover:text-error">取消流程</button>
-        </div>
-      )}
-
-      {run.status === 'business_failed' && (
-        <div className="m-4 rounded-lg border border-error/25 bg-error/10 p-3 text-xs text-error">
-          <div className="flex items-center gap-2 font-semibold"><AlertTriangle className="h-4 w-4" />已生成待确认问题草稿</div>
-          {defect && <p className="mt-1 truncate text-[11px]">{defect.title}</p>}
-          {evidence?.screenshotPath && <button type="button" className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold hover:underline" title="失败截图已保存，可在问题单中查看"><ExternalLink className="h-3 w-3" />查看失败截图</button>}
-        </div>
-      )}
-
-      {run.status === 'passed' && (
-        <div className="mx-4 mt-4 flex items-center gap-2 rounded-lg border border-success/25 bg-success/10 px-3 py-2 text-[11px] text-success"><CheckCircle2 className="h-4 w-4" />流程已通过</div>
-      )}
-      {run.status === 'execution_blocked' && (
-        <div className="mx-4 mt-4 flex items-center gap-2 rounded-lg border border-error/25 bg-error/10 px-3 py-2 text-[11px] text-error"><XCircle className="h-4 w-4" />执行被阻断，请检查浏览器连接</div>
-      )}
-
-      <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
-        {events.length === 0 ? (
-          <li className="py-8 text-center text-xs text-text-muted">暂无语义执行记录</li>
-        ) : events.map((event) => (
-          <li key={event.id} className="relative border-l border-border pl-4 text-xs text-text-secondary">
-            <span className="absolute -left-1.5 top-1 h-3 w-3 rounded-full border border-brand-500/40 bg-surface-1" />
-            <div className="flex items-center gap-2 text-[10px] text-text-muted">
-              <span>{new Date(event.occurredAt).toLocaleTimeString()}</span>
-              {event.role && <span className="rounded border border-border bg-surface-2 px-1.5 py-0.5">{ROLE_LABEL[event.role]}</span>}
-            </div>
-            <p className="mt-1 leading-relaxed">{event.message}</p>
-          </li>
-        ))}
-      </ol>
-    </section>
-  )
+  const scope = runScope(run)
+  const events = eventsByRun[run.id] ?? []
+  const canPause = run.status === 'running'
+  const canResume = run.status === 'paused' || run.status === 'waiting_handoff'
+  return <section className="flex min-h-[360px] flex-col border-l border-border bg-surface-1">
+    <header className="border-b border-border px-4 py-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-sm font-bold text-text-primary">{scope.suiteName}</h3><p className="mt-1 text-[11px] text-text-muted">{scope.systemName} · {scope.environmentName} · {run.id.slice(0, 8)}</p></div><span className="shrink-0 rounded border border-border bg-surface-2 px-2 py-1 text-[10px] font-semibold text-text-secondary">{RUN_STATUS_LABEL[run.status]}</span></div>
+      <div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => void pause(run.id)} disabled={!canPause} className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text-secondary disabled:opacity-35"><Pause className="h-3 w-3" />暂停</button><button type="button" onClick={() => void resume(run.id)} disabled={!canResume} className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text-secondary disabled:opacity-35"><Play className="h-3 w-3" />继续</button><button type="button" onClick={() => void terminate(run.id)} disabled={isTerminalRun(run.status)} className="inline-flex h-7 items-center gap-1 rounded-md border border-error/30 px-2 text-[11px] text-error disabled:opacity-35"><Square className="h-3 w-3" />终止</button>{scope.designId && <button type="button" onClick={() => onBackToDesign?.(scope.designId)} className="ml-auto text-[11px] font-semibold text-brand-400">返回测试设计</button>}</div>
+    </header>
+    {run.status === 'business_failed' && <div className="m-4 flex items-center gap-2 border border-error/25 bg-error/10 p-3 text-xs text-error"><AlertTriangle className="h-4 w-4" />业务断言失败，可在问题跟踪中创建缺陷并查看业务截图。</div>}
+    {run.status === 'passed' && <div className="mx-4 mt-4 flex items-center gap-2 border border-success/25 bg-success/10 px-3 py-2 text-xs text-success"><CheckCircle2 className="h-4 w-4" />运行通过</div>}
+    {['blocked', 'cancelled', 'interrupted'].includes(run.status) && <div className="mx-4 mt-4 flex items-start gap-2 border border-warning/25 bg-warning/10 px-3 py-2 text-xs text-warning"><XCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>这是执行诊断，不会创建业务问题。{run.errorMessage ? ` ${run.errorMessage}` : ''}</span></div>}
+    <ol className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{events.length === 0 ? <li className="py-8 text-center text-xs text-text-muted">暂无事件，重新进入页面后会按运行编号恢复。</li> : events.map((event) => <li key={event.sequence} className="border-l border-border py-2 pl-4 text-xs text-text-secondary"><div className="flex items-center justify-between gap-2"><span className="font-medium text-text-primary">{eventMessage(event)}</span><time className="shrink-0 text-[10px] text-text-muted">{new Date(event.createdAt).toLocaleTimeString('zh-CN', { hour12: false })}</time></div><p className="mt-1 text-[10px] text-text-muted">#{event.sequence} · {event.kind}</p></li>)}</ol>
+  </section>
 }
 
 export default WorkflowRunConsole

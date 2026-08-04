@@ -21,33 +21,22 @@ function writeList<T>(name: string, items: T[]): void {
   localStorage.setItem(key(name), JSON.stringify(items));
 }
 
-function isLegacyPlaceholderCase(testCase: TestCase): boolean {
-  const knownLegacyCase = !testCase.templateId && (
-    testCase.title?.trim() === '正常流程测试'
-    || (
-      testCase.requirementTitle?.trim().includes('入职登记表问题')
-      && testCase.riskPoint?.trim().includes('需求覆盖不足')
-      && !testCase.expectedResult?.trim()
-    )
-  );
-  const generatedGenericCase = testCase.expectedResult === '系统行为符合需求。'
-    && testCase.riskPoint?.endsWith('覆盖不足')
-    && testCase.steps?.some((step) => step.action.includes('场景填写或查询测试数据'))
-    && testCase.steps?.some((step) => step.action === '提交或保存后检查结果');
-  return knownLegacyCase || generatedGenericCase;
+/** Read-only source for the Task 9 SQLite migration. */
+export function loadLegacyTestCases(): TestCase[] {
+  return readList<TestCase>('test_cases');
 }
 
+/** @deprecated Legacy UI compatibility only. Delete after Task 9 switches all callers to SQLite. */
 export function loadTestCases(): TestCase[] {
-  const cases = readList<TestCase>('test_cases');
-  const filtered = cases.filter((testCase) => !isLegacyPlaceholderCase(testCase));
-  if (filtered.length !== cases.length) writeList('test_cases', filtered);
-  return filtered;
+  return loadLegacyTestCases();
 }
 
+/** @deprecated Legacy UI compatibility only. Delete after Task 9 switches all callers to SQLite. */
 export function saveTestCases(cases: TestCase[]): void {
-  writeList('test_cases', cases.filter((testCase) => !isLegacyPlaceholderCase(testCase)));
+  writeList('test_cases', cases);
 }
 
+/** @deprecated Legacy UI compatibility only. Delete after Task 9 switches all callers to SQLite. */
 export function upsertTestCase(testCase: TestCase): TestCase[] {
   const cases = loadTestCases();
   const index = cases.findIndex((item) => item.id === testCase.id);
@@ -55,6 +44,13 @@ export function upsertTestCase(testCase: TestCase): TestCase[] {
   else cases.unshift(testCase);
   saveTestCases(cases);
   return cases;
+}
+
+export function isCaseSourceStale(
+  testCase: Pick<TestCase, 'id' | 'requirementVersionId'>,
+  currentVersionId?: string,
+): boolean {
+  return Boolean(currentVersionId && testCase.requirementVersionId !== currentVersionId);
 }
 
 export function loadSuites(): RegressionSuite[] {

@@ -175,6 +175,9 @@ export interface TestCaseStep {
 
 export interface TestCase {
   id: string;
+  designId?: string;
+  requirementVersionId?: string;
+  generationBatchId?: string;
   title: string;
   requirementTitle: string;
   module: string;
@@ -208,3 +211,37 @@ export interface RegressionSuite {
   lastRunAt?: string;
   lastPassRate?: number;
 }
+
+export type {
+  CreateEnvironmentInput,
+  CreateGenerationBatchInput,
+  CreateRegressionConfigInput,
+  CreateRequirementVersionInput,
+  DesignTestCaseRecord,
+  CreateReviewRecordInput,
+  CreateTestDesignInput,
+  EnvironmentKind,
+  GenerationBatch,
+  SaveGenerationCasesInput,
+  RegressionConfig,
+  RequirementVersion,
+  ReviewRecord,
+  SystemEnvironment,
+  TestDesign,
+  TestSystem,
+  UpdateEnvironmentInput,
+  UpdateDesignCaseStatusInput,
+  UpdateTestDesignInput,
+  UpdateTestSystemInput,
+} from './testDesign'
+
+export type {
+  ExecutionErrorCategory,
+  ExecutionPlan,
+  ExecutionRun,
+  ExecutionRunEvent,
+  ExecutionRunStatus,
+  RunEventPayload,
+  RunUpdatedEvent,
+  StartRunInput,
+} from './execution'

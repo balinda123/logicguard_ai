@@ -15,6 +15,11 @@ dist-ssr
 .runtime-cache
 .superpowers/sdd/
 /.codex-review-target-*/
+artifacts/runs/
+sidecar/.stagehand/
+src-tauri/runtime/
+migration-backups/
+coverage/
 src-tauri/resources/runtime/*
 src-tauri/resources/sidecar/*
 !src-tauri/resources/runtime/.gitkeep
@@ -30,5 +35,3 @@ src-tauri/resources/sidecar/*
 *.njsproj
 *.sln
 *.sw?
-
-docs/superpowers/*

@@ -1,7 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
 
-import { getCdpPort } from './browserBridge'
-import { getLlmConfig } from './llmBridge'
 import type {
   AccountCombination,
   BusinessRole,
@@ -10,9 +8,11 @@ import type {
   FailureEvidence,
   LoginAutomationConfig,
   RunStatus,
+  ScopeRef,
   ScenarioKind,
   TestAccount,
   WorkflowRun,
+  WorkflowRunSnapshot,
   WorkflowRunEvent,
   WorkflowScenario,
   WorkflowScenarioStep,
@@ -27,6 +27,9 @@ interface RustTestAccount {
   loginMode: TestAccount['loginMode']
   loginConfig: LoginAutomationConfig
   isEnabled: boolean
+  systemId: string | null
+  environmentId: string | null
+  scopeState?: TestAccount['scopeState']
   createdAt: string
   updatedAt: string
 }
@@ -35,10 +38,13 @@ interface RustWorkflowScenario {
   id: string
   name: string
   scenarioKind: ScenarioKind
-  sourceTestCaseId?: string
+  sourceTestCaseId: string | null
   businessTagsJson: string
   preconditionsJson: string
   stepsJson: string
+  systemId: string | null
+  environmentId: string | null
+  scopeState?: WorkflowScenario['scopeState']
   createdAt: string
   updatedAt: string
 }
@@ -46,11 +52,17 @@ interface RustWorkflowScenario {
 interface RustWorkflowRun {
   id: string
   scenarioId: string
-  accountCombinationId?: string
+  accountCombinationId: string | null
   status: RunStatus
   currentStepOrder: number
-  startedAt?: string
-  finishedAt?: string
+  systemId: string | null
+  environmentId: string | null
+  designId: string | null
+  requirementVersionId: string | null
+  scopeState: WorkflowRun['scopeState']
+  snapshot: WorkflowRunSnapshot | null
+  startedAt: string | null
+  finishedAt: string | null
   createdAt: string
   updatedAt: string
 }
@@ -60,7 +72,7 @@ interface RustWorkflowRunEvent {
   runId: string
   sequenceNo: number
   phase: string
-  businessRole?: BusinessRole
+  businessRole: BusinessRole | null
   message: string
   createdAt: string
 }
@@ -69,9 +81,12 @@ interface RustFailureEvidence {
   id: string
   runId: string
   stepId: string
-  expected: string
-  actual: string
-  screenshotPath?: string
+  expectedValue: string
+  actualValue: string
+  screenshotPath: string | null
+  systemId: string | null
+  environmentId: string | null
+  scopeState?: FailureEvidence['scopeState']
   createdAt: string
   updatedAt: string
 }
@@ -84,10 +99,26 @@ interface RustDefectDraft {
   expectedResult: string
   actualResult: string
   impactSummary: string
-  businessRole: BusinessRole
+  businessRole: BusinessRole | null
   scenarioId: string
   runId: string
-  evidenceId?: string
+  evidenceId: string | null
+  systemId: string | null
+  environmentId: string | null
+  scopeState?: DefectDraft['scopeState']
+  createdAt: string
+  updatedAt: string
+}
+
+interface RustAccountCombination {
+  id: string
+  name: string
+  employeeAccountId: string | null
+  managerAccountId: string | null
+  hrbpAccountId: string | null
+  systemId: string | null
+  environmentId: string | null
+  scopeState: AccountCombination['scopeState']
   createdAt: string
   updatedAt: string
 }
@@ -112,6 +143,17 @@ export interface WorkflowRunInput {
   accountCombinationId?: string
   status: RunStatus
   currentStepIndex: number
+}
+
+export interface ScopedTestAccountInput extends TestAccountInput, ScopeRef {}
+export interface ScopedAccountCombinationInput extends AccountCombinationInput, ScopeRef {}
+export interface ScopedWorkflowScenarioInput extends ScopeRef { scenario: WorkflowScenario }
+
+export interface ScopedWorkflowRunInput extends ScopeRef {
+  designId: string
+  requirementVersionId: string
+  scenarioId: string
+  accountCombinationId?: string
 }
 
 export interface WorkflowRunEventInput {
@@ -142,7 +184,7 @@ export interface DefectDraftInput {
   expectedResult: string
   actualResult: string
   impact: string
-  role: BusinessRole
+  role?: BusinessRole
 }
 
 function parseStringList(serialized: string): string[] {
@@ -184,6 +226,9 @@ function mapTestAccount(account: RustTestAccount): TestAccount {
     credentialRef: account.credentialRef,
     loginMode: account.loginMode,
     enabled: account.isEnabled,
+    systemId: account.systemId ?? undefined,
+    environmentId: account.environmentId ?? undefined,
+    scopeState: account.scopeState,
     loginConfig: account.loginConfig,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
@@ -199,6 +244,9 @@ function mapScenario(scenario: RustWorkflowScenario): WorkflowScenario {
     businessTags: parseStringList(scenario.businessTagsJson),
     preconditions: parseStringList(scenario.preconditionsJson),
     steps: parseSteps(scenario.stepsJson),
+    systemId: scenario.systemId ?? undefined,
+    environmentId: scenario.environmentId ?? undefined,
+    scopeState: scenario.scopeState,
     createdAt: scenario.createdAt,
     updatedAt: scenario.updatedAt,
   }
@@ -208,11 +256,17 @@ function mapRun(run: RustWorkflowRun): WorkflowRun {
   return {
     id: run.id,
     scenarioId: run.scenarioId,
-    accountCombinationId: run.accountCombinationId,
+    accountCombinationId: run.accountCombinationId ?? undefined,
     status: run.status,
     currentStepIndex: run.currentStepOrder,
-    startedAt: run.startedAt,
-    finishedAt: run.finishedAt,
+    systemId: run.systemId ?? undefined,
+    environmentId: run.environmentId ?? undefined,
+    designId: run.designId ?? undefined,
+    requirementVersionId: run.requirementVersionId ?? undefined,
+    scopeState: run.scopeState,
+    snapshot: run.snapshot ?? undefined,
+    startedAt: run.startedAt ?? undefined,
+    finishedAt: run.finishedAt ?? undefined,
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
   }
@@ -224,14 +278,26 @@ function mapEvent(event: RustWorkflowRunEvent): WorkflowRunEvent {
     runId: event.runId,
     sequence: event.sequenceNo,
     phase: event.phase,
-    role: event.businessRole,
+    role: event.businessRole ?? undefined,
     message: event.message,
     occurredAt: event.createdAt,
   }
 }
 
 function mapEvidence(evidence: RustFailureEvidence): FailureEvidence {
-  return evidence
+  return {
+    id: evidence.id,
+    runId: evidence.runId,
+    stepId: evidence.stepId,
+    expected: evidence.expectedValue,
+    actual: evidence.actualValue,
+    screenshotPath: evidence.screenshotPath ?? undefined,
+    systemId: evidence.systemId ?? undefined,
+    environmentId: evidence.environmentId ?? undefined,
+    scopeState: evidence.scopeState,
+    createdAt: evidence.createdAt,
+    updatedAt: evidence.updatedAt,
+  }
 }
 
 function mapDefect(draft: RustDefectDraft): DefectDraft {
@@ -243,10 +309,13 @@ function mapDefect(draft: RustDefectDraft): DefectDraft {
     expectedResult: draft.expectedResult,
     actualResult: draft.actualResult,
     impact: draft.impactSummary,
-    role: draft.businessRole,
+    role: draft.businessRole ?? undefined,
     scenarioId: draft.scenarioId,
     runId: draft.runId,
-    evidenceId: draft.evidenceId,
+    evidenceId: draft.evidenceId ?? undefined,
+    systemId: draft.systemId ?? undefined,
+    environmentId: draft.environmentId ?? undefined,
+    scopeState: draft.scopeState,
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,
   }
@@ -261,9 +330,34 @@ export async function createTestAccount(input: TestAccountInput): Promise<TestAc
   const account = await invoke<RustTestAccount>('create_test_account', {
     input: {
       displayName: input.displayName,
-      businessRole: input.role,
+      businessRole: input.role ?? null,
       loginMode: input.loginMode,
       loginConfig: input.loginConfig,
+    },
+  })
+  return mapTestAccount(account)
+}
+
+function mapAccountCombination(combination: RustAccountCombination): AccountCombination {
+  return {
+    id: combination.id,
+    name: combination.name,
+    employeeAccountId: combination.employeeAccountId ?? undefined,
+    managerAccountId: combination.managerAccountId ?? undefined,
+    hrbpAccountId: combination.hrbpAccountId ?? undefined,
+    systemId: combination.systemId ?? undefined,
+    environmentId: combination.environmentId ?? undefined,
+    scopeState: combination.scopeState,
+    createdAt: combination.createdAt,
+    updatedAt: combination.updatedAt,
+  }
+}
+
+export async function createScopedTestAccount(input: ScopedTestAccountInput): Promise<TestAccount> {
+  const account = await invoke<RustTestAccount>('create_scoped_test_account', {
+    input: {
+      scope: { systemId: input.systemId, environmentId: input.environmentId },
+      account: { displayName: input.displayName, businessRole: input.role, loginMode: input.loginMode, loginConfig: input.loginConfig },
     },
   })
   return mapTestAccount(account)
@@ -292,11 +386,19 @@ export async function setTestAccountCredential(accountId: string, username: stri
 }
 
 export async function listAccountCombinations(): Promise<AccountCombination[]> {
-  return await invoke<AccountCombination[]>('list_account_combinations')
+  const combinations = await invoke<RustAccountCombination[]>('list_account_combinations')
+  return combinations.map(mapAccountCombination)
 }
 
 export async function saveAccountCombination(input: AccountCombinationInput): Promise<AccountCombination> {
-  return await invoke<AccountCombination>('save_account_combination', { input })
+  return mapAccountCombination(await invoke<RustAccountCombination>('save_account_combination', { input }))
+}
+
+export async function saveScopedAccountCombination(input: ScopedAccountCombinationInput): Promise<AccountCombination> {
+  const { systemId, environmentId, ...combination } = input
+  return mapAccountCombination(await invoke<RustAccountCombination>('save_scoped_account_combination', {
+    input: { scope: { systemId, environmentId }, combination },
+  }))
 }
 
 export async function deleteAccountCombination(id: string): Promise<void> {
@@ -323,6 +425,25 @@ export async function saveWorkflowScenario(scenario: WorkflowScenario): Promise<
   return mapScenario(result)
 }
 
+export async function saveScopedWorkflowScenario(input: ScopedWorkflowScenarioInput): Promise<WorkflowScenario> {
+  const scenario = input.scenario
+  const result = await invoke<RustWorkflowScenario>('save_scoped_workflow_scenario', {
+    input: {
+      scope: { systemId: input.systemId, environmentId: input.environmentId },
+      scenario: {
+        id: scenario.id || null,
+        name: scenario.title,
+        scenarioKind: scenario.scenarioKind,
+        sourceTestCaseId: scenario.sourceTestCaseId || null,
+        businessTagsJson: JSON.stringify(scenario.businessTags),
+        preconditionsJson: JSON.stringify(scenario.preconditions),
+        stepsJson: JSON.stringify(scenario.steps),
+      },
+    },
+  })
+  return mapScenario(result)
+}
+
 export async function deleteWorkflowScenario(id: string): Promise<void> {
   await invoke('delete_workflow_scenario', { id })
 }
@@ -334,6 +455,20 @@ export async function createWorkflowRun(input: WorkflowRunInput): Promise<Workfl
       accountCombinationId: input.accountCombinationId ?? null,
       status: input.status,
       currentStepOrder: input.currentStepIndex,
+    },
+  })
+  return mapRun(run)
+}
+
+/** Scope-aware entry point. Legacy createWorkflowRun remains until Task 9 migration completes. */
+export async function createScopedWorkflowRun(input: ScopedWorkflowRunInput): Promise<WorkflowRun> {
+  const run = await invoke<RustWorkflowRun>('create_scoped_workflow_run', {
+    input: {
+      scope: { systemId: input.systemId, environmentId: input.environmentId },
+      designId: input.designId,
+      requirementVersionId: input.requirementVersionId,
+      scenarioId: input.scenarioId,
+      accountCombinationId: input.accountCombinationId ?? null,
     },
   })
   return mapRun(run)
@@ -406,28 +541,4 @@ export async function listDefectDrafts(): Promise<DefectDraft[]> {
 export async function updateDefectDraftStatus(id: string, status: DefectStatus): Promise<DefectDraft> {
   const draft = await invoke<RustDefectDraft>('update_defect_draft_status', { id, status })
   return mapDefect(draft)
-}
-
-export async function clearBrowserSession(): Promise<void> {
-  await invoke('browser_clear_session', { port: getCdpPort() })
-}
-
-/** Starts a credential-store-owned login. No credential is readable by the frontend. */
-export async function loginTestAccount(accountId: string): Promise<{
-  status: 'completed' | 'manual_handoff_required'
-  finalUrl?: string
-}> {
-  return await invoke('browser_login_test_account', {
-    accountId,
-    port: getCdpPort(),
-    config: getLlmConfig(),
-  })
-}
-
-export async function captureFailureScreenshot(runId: string, stepId: string): Promise<{ screenshotPath: string }> {
-  return await invoke<{ screenshotPath: string }>('browser_capture_failure_screenshot', {
-    runId,
-    stepId,
-    port: getCdpPort(),
-  })
 }

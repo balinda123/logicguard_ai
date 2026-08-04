@@ -1,55 +1,42 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { loadTestCases, saveTestCases } from './testCaseStore'
+import { isCaseSourceStale, loadLegacyTestCases } from './testCaseStore'
+import type { TestCase } from '../types'
 
-describe('loadTestCases', () => {
-  beforeEach(() => {
-    localStorage.clear()
-    sessionStorage.clear()
+const testCase = {
+  id: 'case-1',
+  title: 'Case',
+  requirementTitle: 'Requirement',
+  module: 'Payroll',
+  type: 'normal',
+  priority: 'P1',
+  riskPoint: '',
+  preconditions: [],
+  testData: {},
+  steps: [],
+  expectedResult: 'Approved',
+  isBoundary: false,
+  isRepeat: false,
+  status: 'draft',
+  createdAt: 'now',
+  suiteIds: [],
+} satisfies TestCase
+
+beforeEach(() => {
+  localStorage.clear()
+  sessionStorage.setItem('logicguard_user_id', 'user-1')
+})
+
+describe('legacy test case compatibility', () => {
+  it('reads the existing user-scoped test_cases key for migration', () => {
+    localStorage.setItem('logicguard_test_cases_user-1', JSON.stringify([testCase]))
+    expect(loadLegacyTestCases()).toEqual([testCase])
   })
 
-  it('removes only the known legacy placeholder cases', () => {
-    localStorage.setItem('logicguard_test_cases_anonymous', JSON.stringify([
-      { id: 'legacy', title: '正常流程测试', requirementTitle: '入职登记表问题', riskPoint: '需求覆盖不足' },
-      { id: 'real', title: '输入101字校验', requirementTitle: '3.1 输入字数与提交校验', riskPoint: '字数上限校验失效' },
-    ]))
-
-    expect(loadTestCases().map(testCase => testCase.id)).toEqual(['real'])
-  })
-
-  it('removes generated generic fallback cases while keeping detailed generated cases', () => {
-    localStorage.setItem('logicguard_test_cases_anonymous', JSON.stringify([
-      {
-        id: 'generic',
-        title: '正常流程：场景模板：试用期全角色字数校验测试',
-        requirementTitle: '场景模板：试用期全角色字数校验测试',
-        riskPoint: '正常流程覆盖不足',
-        expectedResult: '系统行为符合需求。',
-        steps: [
-          { order: 1, action: '进入试用期相关页面' },
-          { order: 2, action: '按正常流程场景填写或查询测试数据' },
-          { order: 3, action: '提交或保存后检查结果' },
-        ],
-      },
-      {
-        id: 'detailed',
-        title: '员工提交后上级退回目标',
-        requirementTitle: '3.1 输入字数与提交校验',
-        riskPoint: '多角色状态流转失败',
-        expectedResult: '目标回到员工待办',
-        steps: [{ order: 1, role: 'manager', action: '退回目标' }],
-      },
-    ]))
-
-    expect(loadTestCases().map(testCase => testCase.id)).toEqual(['detailed'])
-  })
-
-  it('does not persist legacy placeholders when current UI state still contains them', () => {
-    saveTestCases([
-      { id: 'legacy', title: '正常流程测试 ', requirementTitle: ' 入职登记表问题 ', riskPoint: '需求覆盖不足 ', expectedResult: '' },
-      { id: 'real', title: '员工目标边界校验', requirementTitle: '3.1', riskPoint: '边界错误' },
-    ] as any)
-
-    expect(loadTestCases().map(testCase => testCase.id)).toEqual(['real'])
+  it('marks a scoped case stale only when its requirement version differs', () => {
+    expect(isCaseSourceStale({ ...testCase, requirementVersionId: 'requirement-1' }, 'requirement-2')).toBe(true)
+    expect(isCaseSourceStale({ ...testCase, requirementVersionId: 'requirement-2' }, 'requirement-2')).toBe(false)
+    expect(isCaseSourceStale(testCase, 'requirement-2')).toBe(true)
+    expect(isCaseSourceStale(testCase, undefined)).toBe(false)
   })
 })

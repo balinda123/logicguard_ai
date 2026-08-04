@@ -5,7 +5,7 @@
 - Node.js 22（构建脚本会拒绝其他主版本）
 - Rust stable
 - 使用 `npm ci` 安装根目录依赖
-- Chrome 或 Microsoft Edge 用于运行时 CDP 自动化
+- Chrome 或 Microsoft Edge 用于 Stagehand 本地 CDP 自动化；Windows 自动执行必须使用应用启动的专用浏览器
 
 sidecar 不依赖用户电脑上的 Node.js。`npm run prepare:sidecar` 会把当前平台的 Node Runtime、sidecar 和生产依赖复制到 Tauri resources。
 
