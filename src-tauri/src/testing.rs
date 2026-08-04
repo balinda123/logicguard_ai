@@ -54,7 +54,25 @@ pub struct WorkflowRunSnapshotScenario {
     pub name: String,
     pub scenario_kind: String,
     pub source_test_case_id: Option<String>,
-    pub steps: Vec<Value>,
+    pub steps: Vec<WorkflowScenarioStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowScenarioStep {
+    pub id: String,
+    pub order: i64,
+    pub role: String,
+    pub action_intent: String,
+    pub assertions: Vec<String>,
+    #[serde(default)]
+    pub page_url: Option<String>,
+    #[serde(default)]
+    pub selector: Option<String>,
+    #[serde(default)]
+    pub expected_value: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1188,7 +1206,7 @@ fn validate_account_for_role(
 
 fn validate_scoped_account_for_role(
     conn: &Connection,
-    owner_id: &str,
+    _owner_id: &str,
     scope: &ScopeRef,
     id: &Option<String>,
     role: &str,
@@ -1198,8 +1216,8 @@ fn validate_scoped_account_for_role(
     };
     let account: Option<(String, String)> = conn
         .query_row(
-            "SELECT system_id, environment_id FROM test_accounts WHERE id=?1 AND owner_id=?2 AND business_role=?3 AND is_enabled=1 AND scope_state='scoped'",
-            params![id, owner_id, role],
+            "SELECT system_id, environment_id FROM test_accounts WHERE id=?1 AND business_role=?2 AND is_enabled=1 AND scope_state='scoped'",
+            params![id, role],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
@@ -1366,6 +1384,24 @@ fn validate_scenario_input(input: &SaveWorkflowScenarioInput) -> Result<(), Stri
     validate_safe_json(&input.steps_json, "STEPS_JSON")
 }
 
+fn parse_scoped_steps(serialized: &str) -> Result<Vec<WorkflowScenarioStep>, String> {
+    let steps: Vec<WorkflowScenarioStep> =
+        serde_json::from_str(serialized).map_err(|_| "INVALID_WORKFLOW_STEPS".to_string())?;
+    for step in &steps {
+        if step.id.trim().is_empty()
+            || step.order < 0
+            || !BUSINESS_ROLES.contains(&step.role.as_str())
+            || step.action_intent.trim().is_empty()
+            || step.created_at.trim().is_empty()
+            || step.updated_at.trim().is_empty()
+            || step.assertions.iter().any(|value| value.trim().is_empty())
+        {
+            return Err("INVALID_WORKFLOW_STEPS".to_string());
+        }
+    }
+    Ok(steps)
+}
+
 fn get_workflow_scenario(
     conn: &Connection,
     owner_id: &str,
@@ -1433,6 +1469,7 @@ pub(crate) fn save_scoped_workflow_scenario_record(
 ) -> Result<WorkflowScenario, String> {
     validate_scope(conn, &input.scope)?;
     validate_scenario_input(&input.scenario)?;
+    parse_scoped_steps(&input.scenario.steps_json)?;
     let id = input
         .scenario
         .id
@@ -1652,8 +1689,8 @@ pub(crate) fn create_scoped_workflow_run_record(
             if let Some(account_id) = account_id {
                 let account: Option<(String, String, String, String)> = transaction
                     .query_row(
-                        "SELECT display_name, business_role, system_id, environment_id FROM test_accounts WHERE id=?1 AND owner_id=?2 AND is_enabled=1 AND scope_state='scoped'",
-                        params![account_id, owner_id],
+                        "SELECT display_name, business_role, system_id, environment_id FROM test_accounts WHERE id=?1 AND is_enabled=1 AND scope_state='scoped'",
+                        params![account_id],
                         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                     )
                     .optional()
@@ -1675,8 +1712,7 @@ pub(crate) fn create_scoped_workflow_run_record(
             }
         }
     }
-    let steps: Vec<Value> =
-        serde_json::from_str(&scenario.steps_json).map_err(|_| "INVALID_STEPS_JSON".to_string())?;
+    let steps = parse_scoped_steps(&scenario.steps_json)?;
     let case_ids = scenario
         .source_test_case_id
         .iter()

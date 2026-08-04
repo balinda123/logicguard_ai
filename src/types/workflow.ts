@@ -157,7 +157,7 @@ export interface DefectDraft extends ScopedRecord {
   expectedResult: string
   actualResult: string
   impact: string
-  role: BusinessRole
+  role?: BusinessRole
   scenarioId: string
   runId: string
   evidenceId?: string

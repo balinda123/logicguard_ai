@@ -74,6 +74,10 @@ fn scoped_design(
     )
 }
 
+fn scoped_steps_json() -> String {
+    r#"[{"id":"step-payroll","order":1,"role":"employee","actionIntent":"Submit payroll","assertions":["Payroll is accepted"],"pageUrl":"https://payroll.example.test","selector":"#submit","expectedValue":"accepted","createdAt":"2026-08-04T00:00:00Z","updatedAt":"2026-08-04T00:00:00Z"}]"#.to_string()
+}
+
 #[test]
 fn upgrades_existing_testing_schema_idempotently_with_explicit_legacy_scope() {
     let conn = Connection::open_in_memory().unwrap();
@@ -143,7 +147,7 @@ fn scoped_run_rejects_cross_environment_and_freezes_snapshot() {
     let account = testing::create_scoped_test_account_record(
         &conn,
         "admin",
-        "owner-a",
+        "admin",
         &CreateScopedTestAccountInput {
             scope: scope_a.clone(),
             account: account_input("employee"),
@@ -177,7 +181,7 @@ fn scoped_run_rejects_cross_environment_and_freezes_snapshot() {
                 source_test_case_id: Some("case-payroll".into()),
                 business_tags_json: "[]".into(),
                 preconditions_json: "[]".into(),
-                steps_json: r#"[{"id":"step-payroll","role":"employee","intent":"submit"}]"#.into(),
+                steps_json: scoped_steps_json(),
             },
         },
     )
@@ -211,6 +215,16 @@ fn scoped_run_rejects_cross_environment_and_freezes_snapshot() {
     assert_eq!(run.scope_state, "scoped");
     assert_eq!(run.snapshot.scenario.name, "Submit payroll");
     assert_eq!(run.snapshot.case_ids, vec!["case-payroll"]);
+    let snapshot_json = serde_json::to_value(&run.snapshot).unwrap();
+    assert_eq!(
+        snapshot_json["scenario"]["steps"][0]["actionIntent"],
+        "Submit payroll"
+    );
+    assert_eq!(snapshot_json["scenario"]["steps"][0]["order"], 1);
+    assert_eq!(
+        snapshot_json["scenario"]["steps"][0]["createdAt"],
+        "2026-08-04T00:00:00Z"
+    );
 
     conn.execute(
         "UPDATE workflow_scenarios SET name='Edited scenario', steps_json='[]' WHERE id=?1",
@@ -273,7 +287,7 @@ fn scoped_resources_reject_cross_owner_and_cross_scope_account_references() {
     let account = testing::create_scoped_test_account_record(
         &conn,
         "admin",
-        "owner-a",
+        "admin",
         &CreateScopedTestAccountInput {
             scope: scope_a.clone(),
             account: account_input("employee"),
@@ -339,6 +353,36 @@ fn scoped_resources_reject_cross_owner_and_cross_scope_account_references() {
     )
     .unwrap_err();
     assert_eq!(error, "NOT_FOUND");
+}
+
+#[test]
+fn scoped_scenario_rejects_steps_that_do_not_match_the_public_contract() {
+    let mut conn = connection();
+    let (scope, _, _) = scoped_design(&mut conn, "owner-a", "Invalid steps");
+    for steps_json in [
+        r#"[{"id":"step-1","order":1,"role":"employee","assertions":[],"createdAt":"now","updatedAt":"now"}]"#,
+        r#"[{"id":"step-1","role":"employee","actionIntent":"submit","assertions":[],"createdAt":"now","updatedAt":"now"}]"#,
+        r#"[{"id":"step-1","order":1,"role":"employee","actionIntent":"submit","assertions":[]}]"#,
+    ] {
+        let error = testing::save_scoped_workflow_scenario_record(
+            &conn,
+            "owner-a",
+            &SaveScopedWorkflowScenarioInput {
+                scope: scope.clone(),
+                scenario: SaveWorkflowScenarioInput {
+                    id: None,
+                    name: "Invalid".into(),
+                    scenario_kind: "single_role".into(),
+                    source_test_case_id: None,
+                    business_tags_json: "[]".into(),
+                    preconditions_json: "[]".into(),
+                    steps_json: steps_json.into(),
+                },
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, "INVALID_WORKFLOW_STEPS");
+    }
 }
 
 fn account_input(business_role: &str) -> CreateTestAccountInput {
