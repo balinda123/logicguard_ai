@@ -1,7 +1,8 @@
 use crate::test_design::{
     self, CreateEnvironmentInput, CreateGenerationBatchInput, CreateRegressionConfigInput,
     CreateRequirementVersionInput, CreateReviewRecordInput, CreateTestDesignInput,
-    UpdateEnvironmentInput, UpdateTestDesignInput, UpdateTestSystemInput,
+    SaveGenerationCasesInput, UpdateDesignCaseStatusInput, UpdateEnvironmentInput,
+    UpdateTestDesignInput, UpdateTestSystemInput,
 };
 use rusqlite::Connection;
 use std::{
@@ -93,6 +94,7 @@ fn creates_schema_and_two_systems() {
         "test_designs",
         "requirement_versions",
         "generation_batches",
+        "test_cases",
         "review_records",
         "regression_configs",
     ] {
@@ -110,6 +112,38 @@ fn creates_schema_and_two_systems() {
     let second = test_design::create_system_record(&conn, "admin", "Recruiting").unwrap();
     assert_ne!(first.id, second.id);
     assert_eq!(test_design::list_systems_record(&conn).unwrap().len(), 2);
+}
+
+#[test]
+fn generated_cases_are_persisted_and_scoped_to_their_design_version_and_batch() {
+    let mut conn = connection();
+    let (system_id, environment_id) = create_scope(&conn, "case persistence");
+    let design = create_design(&conn, "owner-a", &system_id, &environment_id, "Design");
+    let requirement = test_design::create_requirement_version_record(
+        &mut conn,
+        "owner-a",
+        &CreateRequirementVersionInput { design_id: design.id.clone(), source_kind: "text".into(), content: "Requirement".into() },
+    ).unwrap();
+    let batch = test_design::create_generation_batch_record(
+        &conn,
+        "owner-a",
+        &CreateGenerationBatchInput { design_id: design.id.clone(), requirement_version_id: requirement.id.clone(), model: "model".into(), template_id: None },
+    ).unwrap();
+    let saved = test_design::save_generation_cases_record(
+        &mut conn,
+        "owner-a",
+        &SaveGenerationCasesInput {
+            design_id: design.id.clone(), requirement_version_id: requirement.id,
+            generation_batch_id: batch.id, cases: vec![serde_json::json!({"id":"case-1","title":"Case","status":"draft"})],
+        },
+    ).unwrap();
+    assert_eq!(saved.len(), 1);
+    let confirmed = test_design::update_design_case_status_record(
+        &conn,
+        "owner-a",
+        &UpdateDesignCaseStatusInput { design_id: design.id, case_id: "case-1".into(), status: "confirmed".into() },
+    ).unwrap();
+    assert_eq!(confirmed.status, "confirmed");
 }
 
 #[test]

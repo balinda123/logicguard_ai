@@ -159,6 +159,10 @@ ${logs.map((line) => `- ${line}`).join('\n') || '- 无日志'}`),
   };
 }
 
+/**
+ * Read-only migration compatibility surface. The product route now uses TestDesignPage,
+ * which persists every stage by designId. Keep this loader until migration telemetry is reconciled.
+ */
 export const TestCases: React.FC = () => {
   const [requirement, setRequirement] = useState('');
   const [moduleName, setModuleName] = useState('人事核心流程');

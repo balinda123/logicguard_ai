@@ -9,6 +9,7 @@ import { getCdpPort, setCdpPort as saveCdpPort } from '../api/browserBridge';
 import { getDataSecurityConfig, setDataSecurityConfig, securityModeLabel } from '../utils/privacy';
 import type { DataSecurityConfig, DataSecurityMode } from '../types';
 import { TestAccountsPanel } from '../components/TestAccountsPanel';
+import { SystemEnvironmentManager } from '../components/SystemEnvironmentManager';
 
 interface SettingsProps {
   status: SystemStatus;
@@ -572,6 +573,7 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
           </div>
         </div>
 
+        {currentUser.role === 'admin' && <SystemEnvironmentManager />}
         {currentUser.role === 'admin' && <TestAccountsPanel canManage />}
 
         {currentUser.role === 'admin' && (

@@ -9,9 +9,10 @@ describe('App routes', () => {
     expect(appSource).not.toContain('./pages/Templates');
   });
 
-  it('keeps test design routed to TestCases without obsolete props', () => {
+  it('routes test design through the persisted system-scoped lifecycle', () => {
     expect(appSource).toContain("case 'testdesign'");
-    expect(appSource).toMatch(/case 'testdesign':\s*return <TestCases \/>/);
+    expect(appSource).toMatch(/case 'testdesign':\s*return <TestDesignPage/);
+    expect(appSource).toContain('onNavigate={setActiveTab}');
   });
 
   it('routes the execution center without changing existing pages', () => {

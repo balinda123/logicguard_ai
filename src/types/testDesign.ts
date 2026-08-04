@@ -50,6 +50,17 @@ export interface GenerationBatch {
   updatedAt: string
 }
 
+export interface DesignTestCaseRecord {
+  id: string
+  designId: string
+  requirementVersionId: string
+  generationBatchId?: string
+  payload: Record<string, unknown>
+  status: 'draft' | 'confirmed' | 'archived'
+  createdAt: string
+  updatedAt: string
+}
+
 export interface ReviewRecord {
   id: string
   designId: string
@@ -110,6 +121,19 @@ export interface CreateGenerationBatchInput {
   requirementVersionId: string
   model: string
   templateId?: string
+}
+
+export interface SaveGenerationCasesInput {
+  designId: string
+  requirementVersionId: string
+  generationBatchId: string
+  cases: readonly Record<string, unknown>[]
+}
+
+export interface UpdateDesignCaseStatusInput {
+  designId: string
+  caseId: string
+  status: 'draft' | 'confirmed' | 'archived'
 }
 
 export interface CreateReviewRecordInput {

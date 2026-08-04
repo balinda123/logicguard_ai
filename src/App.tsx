@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
-import { TestCases } from './pages/TestCases';
+import { TestDesignPage } from './pages/TestDesignPage';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import { ExecutionCenter } from './pages/ExecutionCenter';
@@ -55,7 +55,7 @@ function AuthenticatedApp({ user }: { user: SessionUser }) {
       case 'dashboard':
         return <Dashboard onNavigate={setActiveTab} />;
       case 'testdesign':
-        return <TestCases />;
+        return <TestDesignPage canManageAccounts={user.role === 'admin'} onNavigate={setActiveTab} />;
       case 'reports':
         return <Reports onNavigate={setActiveTab} />;
       case 'execution':

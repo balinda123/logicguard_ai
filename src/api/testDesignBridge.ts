@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 
 import type {
   CreateEnvironmentInput,
+  DesignTestCaseRecord,
   CreateGenerationBatchInput,
   CreateRegressionConfigInput,
   CreateRequirementVersionInput,
@@ -15,6 +16,8 @@ import type {
   TestDesign,
   TestSystem,
   UpdateEnvironmentInput,
+  SaveGenerationCasesInput,
+  UpdateDesignCaseStatusInput,
   UpdateTestDesignInput,
   UpdateTestSystemInput,
 } from '../types/testDesign'
@@ -30,6 +33,10 @@ type RustGenerationBatch = Omit<GenerationBatch, 'templateId'> & {
 type RustRegressionConfig = Omit<RegressionConfig, 'suiteId' | 'accountCombinationId'> & {
   suiteId: string | null
   accountCombinationId: string | null
+}
+
+type RustDesignTestCase = Omit<DesignTestCaseRecord, 'generationBatchId'> & {
+  generationBatchId: string | null
 }
 
 function mapTestDesign(record: RustTestDesign): TestDesign {
@@ -49,6 +56,10 @@ function mapRegressionConfig(record: RustRegressionConfig): RegressionConfig {
     suiteId: record.suiteId ?? undefined,
     accountCombinationId: record.accountCombinationId ?? undefined,
   }
+}
+
+function mapDesignTestCase(record: RustDesignTestCase): DesignTestCaseRecord {
+  return { ...record, generationBatchId: record.generationBatchId ?? undefined }
 }
 
 export async function listSystems(): Promise<TestSystem[]> {
@@ -103,6 +114,18 @@ export async function listGenerationBatches(designId: string): Promise<Generatio
 
 export async function createGenerationBatch(input: CreateGenerationBatchInput): Promise<GenerationBatch> {
   return mapGenerationBatch(await invoke<RustGenerationBatch>('create_generation_batch', { input }))
+}
+
+export async function listDesignTestCases(designId: string): Promise<DesignTestCaseRecord[]> {
+  return (await invoke<RustDesignTestCase[]>('list_design_test_cases', { designId })).map(mapDesignTestCase)
+}
+
+export async function saveGenerationCases(input: SaveGenerationCasesInput): Promise<DesignTestCaseRecord[]> {
+  return (await invoke<RustDesignTestCase[]>('save_generation_cases', { input })).map(mapDesignTestCase)
+}
+
+export async function updateDesignCaseStatus(input: UpdateDesignCaseStatusInput): Promise<DesignTestCaseRecord> {
+  return mapDesignTestCase(await invoke<RustDesignTestCase>('update_design_case_status', { input }))
 }
 
 export async function listReviewRecords(designId: string): Promise<ReviewRecord[]> {

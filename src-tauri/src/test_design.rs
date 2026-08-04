@@ -67,6 +67,19 @@ pub struct GenerationBatch {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DesignTestCase {
+    pub id: String,
+    pub design_id: String,
+    pub requirement_version_id: String,
+    pub generation_batch_id: Option<String>,
+    pub payload: Value,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReviewRecord {
     pub id: String,
     pub design_id: String,
@@ -151,6 +164,23 @@ pub struct CreateGenerationBatchInput {
     pub requirement_version_id: String,
     pub model: String,
     pub template_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveGenerationCasesInput {
+    pub design_id: String,
+    pub requirement_version_id: String,
+    pub generation_batch_id: String,
+    pub cases: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateDesignCaseStatusInput {
+    pub design_id: String,
+    pub case_id: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -314,6 +344,26 @@ fn read_regression_config(row: &Row<'_>) -> rusqlite::Result<RegressionConfig> {
     })
 }
 
+fn read_design_test_case(row: &Row<'_>) -> rusqlite::Result<DesignTestCase> {
+    let raw: String = row.get(4)?;
+    Ok(DesignTestCase {
+        id: row.get(0)?,
+        design_id: row.get(1)?,
+        requirement_version_id: row.get(2)?,
+        generation_batch_id: row.get(3)?,
+        payload: serde_json::from_str(&raw).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                4,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?,
+        status: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}
+
 pub(crate) fn initialize_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS systems (
@@ -371,6 +421,20 @@ pub(crate) fn initialize_schema(conn: &Connection) -> Result<(), String> {
            FOREIGN KEY(requirement_version_id, design_id) REFERENCES requirement_versions(id, design_id),
            UNIQUE(id, design_id)
          );
+         CREATE TABLE IF NOT EXISTS test_cases (
+           id TEXT PRIMARY KEY,
+           design_id TEXT NOT NULL REFERENCES test_designs(id),
+           requirement_version_id TEXT NOT NULL,
+           generation_batch_id TEXT,
+           payload_json TEXT NOT NULL,
+           status TEXT NOT NULL CHECK(status IN ('draft','confirmed','archived')),
+           legacy_source_key TEXT,
+           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           FOREIGN KEY(requirement_version_id, design_id) REFERENCES requirement_versions(id, design_id),
+           FOREIGN KEY(generation_batch_id, design_id) REFERENCES generation_batches(id, design_id),
+           UNIQUE(design_id, legacy_source_key)
+         );
          CREATE TABLE IF NOT EXISTS review_records (
            id TEXT PRIMARY KEY,
            design_id TEXT NOT NULL REFERENCES test_designs(id),
@@ -395,6 +459,7 @@ pub(crate) fn initialize_schema(conn: &Connection) -> Result<(), String> {
          CREATE INDEX IF NOT EXISTS idx_designs_owner_scope ON test_designs(owner_id, system_id, environment_id);
          CREATE INDEX IF NOT EXISTS idx_requirement_versions_design ON requirement_versions(design_id, version_no DESC);
          CREATE INDEX IF NOT EXISTS idx_generation_batches_design ON generation_batches(design_id, created_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_test_cases_design ON test_cases(design_id, created_at DESC);
          CREATE INDEX IF NOT EXISTS idx_review_records_design ON review_records(design_id, created_at DESC);",
     )
     .map_err(db_error)
@@ -713,6 +778,98 @@ pub(crate) fn create_generation_batch_record(
         .map_err(db_error)
 }
 
+pub(crate) fn list_design_test_cases_record(
+    conn: &Connection,
+    owner_id: &str,
+    design_id: &str,
+) -> Result<Vec<DesignTestCase>, String> {
+    get_design(conn, owner_id, design_id)?;
+    let mut statement = conn
+        .prepare("SELECT id, design_id, requirement_version_id, generation_batch_id, payload_json, status, created_at, updated_at FROM test_cases WHERE design_id=?1 ORDER BY created_at DESC, id DESC")
+        .map_err(db_error)?;
+    let result = statement
+        .query_map([design_id], read_design_test_case)
+        .map_err(db_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(db_error);
+    result
+}
+
+pub(crate) fn save_generation_cases_record(
+    conn: &mut Connection,
+    owner_id: &str,
+    input: &SaveGenerationCasesInput,
+) -> Result<Vec<DesignTestCase>, String> {
+    get_design(conn, owner_id, &input.design_id)?;
+    let linkage: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM generation_batches WHERE id=?1 AND design_id=?2 AND requirement_version_id=?3",
+            params![input.generation_batch_id, input.design_id, input.requirement_version_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if linkage.is_none() {
+        return Err("CROSS_DESIGN_REFERENCE".to_string());
+    }
+    if input.cases.is_empty() {
+        return Err("GENERATION_CASES_REQUIRED".to_string());
+    }
+
+    let transaction = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db_error)?;
+    for payload in &input.cases {
+        let object = payload.as_object().ok_or_else(|| "INVALID_TEST_CASE".to_string())?;
+        let id = object
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "TEST_CASE_ID_REQUIRED".to_string())?;
+        let status = object
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("draft");
+        if !matches!(status, "draft" | "confirmed" | "archived") {
+            return Err("INVALID_TEST_CASE_STATUS".to_string());
+        }
+        transaction
+            .execute(
+                "INSERT INTO test_cases(id, design_id, requirement_version_id, generation_batch_id, payload_json, status) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, input.design_id, input.requirement_version_id, input.generation_batch_id, payload.to_string(), status],
+            )
+            .map_err(db_error)?;
+    }
+    transaction.commit().map_err(db_error)?;
+    list_design_test_cases_record(conn, owner_id, &input.design_id)
+}
+
+pub(crate) fn update_design_case_status_record(
+    conn: &Connection,
+    owner_id: &str,
+    input: &UpdateDesignCaseStatusInput,
+) -> Result<DesignTestCase, String> {
+    get_design(conn, owner_id, &input.design_id)?;
+    if !matches!(input.status.as_str(), "draft" | "confirmed" | "archived") {
+        return Err("INVALID_TEST_CASE_STATUS".to_string());
+    }
+    let changed = conn
+        .execute(
+            "UPDATE test_cases SET status=?1, updated_at=CURRENT_TIMESTAMP WHERE id=?2 AND design_id=?3",
+            params![input.status, input.case_id, input.design_id],
+        )
+        .map_err(db_error)?;
+    if changed == 0 {
+        return Err("NOT_FOUND".to_string());
+    }
+    conn.query_row(
+        "SELECT id, design_id, requirement_version_id, generation_batch_id, payload_json, status, created_at, updated_at FROM test_cases WHERE id=?1 AND design_id=?2",
+        params![input.case_id, input.design_id],
+        read_design_test_case,
+    )
+    .map_err(db_error)
+}
+
 pub(crate) fn list_review_records_record(
     conn: &Connection,
     owner_id: &str,
@@ -936,6 +1093,34 @@ pub fn create_generation_batch(
 ) -> Result<GenerationBatch, String> {
     let owner = crate::auth::current_user_id()?;
     create_generation_batch_record(&crate::auth::open_db(&app)?, &owner, &input)
+}
+
+#[tauri::command]
+pub fn list_design_test_cases(
+    app: tauri::AppHandle,
+    design_id: String,
+) -> Result<Vec<DesignTestCase>, String> {
+    let owner = crate::auth::current_user_id()?;
+    list_design_test_cases_record(&crate::auth::open_db(&app)?, &owner, &design_id)
+}
+
+#[tauri::command]
+pub fn save_generation_cases(
+    app: tauri::AppHandle,
+    input: SaveGenerationCasesInput,
+) -> Result<Vec<DesignTestCase>, String> {
+    let owner = crate::auth::current_user_id()?;
+    let mut conn = crate::auth::open_db(&app)?;
+    save_generation_cases_record(&mut conn, &owner, &input)
+}
+
+#[tauri::command]
+pub fn update_design_case_status(
+    app: tauri::AppHandle,
+    input: UpdateDesignCaseStatusInput,
+) -> Result<DesignTestCase, String> {
+    let owner = crate::auth::current_user_id()?;
+    update_design_case_status_record(&crate::auth::open_db(&app)?, &owner, &input)
 }
 
 #[tauri::command]

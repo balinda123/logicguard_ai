@@ -9,6 +9,7 @@ import {
   createSystemEnvironment,
   createTestDesign,
   getRegressionConfig,
+  listDesignTestCases,
   listGenerationBatches,
   listRequirementVersions,
   listReviewRecords,
@@ -16,9 +17,11 @@ import {
   listSystems,
   listTestDesigns,
   saveRegressionConfig,
+  saveGenerationCases,
   updateSystem,
   updateSystemEnvironment,
   updateTestDesign,
+  updateDesignCaseStatus,
 } from './testDesignBridge'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
@@ -37,6 +40,7 @@ describe('testDesignBridge', () => {
         return { ...record, currentRequirementVersionId: null }
       }
       if (command === 'create_generation_batch') return { ...record, templateId: null }
+      if (command === 'update_design_case_status') return { ...record, generationBatchId: null, payload: {}, status: 'confirmed' }
       if (command === 'save_regression_config') {
         return { ...record, suiteId: null, accountCombinationId: null }
       }
@@ -56,6 +60,9 @@ describe('testDesignBridge', () => {
     await createRequirementVersion({ designId: 'design-1', sourceKind: 'text', content: 'v1' })
     await listGenerationBatches('design-1')
     await createGenerationBatch({ designId: 'design-1', requirementVersionId: 'requirement-1', model: 'model-1' })
+    await listDesignTestCases('design-1')
+    await saveGenerationCases({ designId: 'design-1', requirementVersionId: 'requirement-1', generationBatchId: 'batch-1', cases: [{ id: 'case-1' }] })
+    await updateDesignCaseStatus({ designId: 'design-1', caseId: 'case-1', status: 'confirmed' })
     await listReviewRecords('design-1')
     await createReview({ designId: 'design-1', generationBatchId: 'batch-1', conclusion: 'approved', changeSummary: '' })
     await getRegressionConfig('design-1')
@@ -75,6 +82,9 @@ describe('testDesignBridge', () => {
       ['create_requirement_version', { input: { designId: 'design-1', sourceKind: 'text', content: 'v1' } }],
       ['list_generation_batches', { designId: 'design-1' }],
       ['create_generation_batch', { input: { designId: 'design-1', requirementVersionId: 'requirement-1', model: 'model-1' } }],
+      ['list_design_test_cases', { designId: 'design-1' }],
+      ['save_generation_cases', { input: { designId: 'design-1', requirementVersionId: 'requirement-1', generationBatchId: 'batch-1', cases: [{ id: 'case-1' }] } }],
+      ['update_design_case_status', { input: { designId: 'design-1', caseId: 'case-1', status: 'confirmed' } }],
       ['list_review_records', { designId: 'design-1' }],
       ['create_review', { input: { designId: 'design-1', generationBatchId: 'batch-1', conclusion: 'approved', changeSummary: '' } }],
       ['get_regression_config', { designId: 'design-1' }],

@@ -1,6 +1,7 @@
 mod auth;
 mod browser;
 mod interaction_guard;
+mod legacy_migration;
 mod llm;
 mod reports;
 mod run_manager;
@@ -19,6 +20,9 @@ mod run_manager_tests;
 
 #[cfg(test)]
 mod interaction_guard_tests;
+
+#[cfg(test)]
+mod legacy_migration_tests;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -69,10 +73,14 @@ pub fn run() {
             test_design::create_requirement_version,
             test_design::list_generation_batches,
             test_design::create_generation_batch,
+            test_design::list_design_test_cases,
+            test_design::save_generation_cases,
+            test_design::update_design_case_status,
             test_design::list_review_records,
             test_design::create_review,
             test_design::get_regression_config,
             test_design::save_regression_config,
+            legacy_migration::import_legacy_test_data,
             testing::list_test_accounts,
             testing::create_test_account,
             testing::create_scoped_test_account,
