@@ -25,6 +25,7 @@ export function RunFilters({ value, systems, environments, onChange }: {
   </div>
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- colocated pure filter contract
 export function matchesRunFilters(run: { status: ExecutionRunStatus; createdAt: string }, scope: { systemId: string; environmentId: string }, filters: RunFilterValue): boolean {
   if (filters.systemId !== 'all' && scope.systemId !== filters.systemId) return false
   if (filters.environmentId !== 'all' && scope.environmentId !== filters.environmentId) return false

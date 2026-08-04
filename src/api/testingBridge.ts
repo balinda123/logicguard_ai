@@ -184,7 +184,7 @@ export interface DefectDraftInput {
   expectedResult: string
   actualResult: string
   impact: string
-  role: BusinessRole
+  role?: BusinessRole
 }
 
 function parseStringList(serialized: string): string[] {
@@ -330,7 +330,7 @@ export async function createTestAccount(input: TestAccountInput): Promise<TestAc
   const account = await invoke<RustTestAccount>('create_test_account', {
     input: {
       displayName: input.displayName,
-      businessRole: input.role,
+      businessRole: input.role ?? null,
       loginMode: input.loginMode,
       loginConfig: input.loginConfig,
     },

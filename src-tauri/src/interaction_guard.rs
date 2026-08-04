@@ -12,10 +12,12 @@ pub struct GuardLease {
 }
 
 impl GuardLease {
+    #[cfg(test)]
     pub fn owner_run_id(&self) -> &str {
         &self.owner_run_id
     }
 
+    #[cfg(test)]
     pub fn browser_pid(&self) -> u32 {
         self.browser_pid
     }

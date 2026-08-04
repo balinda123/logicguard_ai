@@ -155,7 +155,6 @@ impl Drop for StoredBrowserCredential {
 
 /// Combines browser metadata with an OS-keyring credential for the internal executor.
 pub(crate) struct AutomaticBrowserLogin {
-    pub(crate) login_config: LoginAutomationConfig,
     pub(crate) credential: StoredBrowserCredential,
 }
 
@@ -1190,7 +1189,6 @@ pub(crate) fn load_automatic_login_for_snapshot(
     validate_credential_value(&payload.password, "PASSWORD")
         .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_INVALID".to_string())?;
     Ok(AutomaticBrowserLogin {
-        login_config: account.login_config,
         credential: StoredBrowserCredential {
             username: std::mem::take(&mut payload.username),
             password: std::mem::take(&mut payload.password),

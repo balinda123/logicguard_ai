@@ -100,6 +100,8 @@ export function TestDesignPage({ onNavigate }: Props) {
         if (result?.quarantinedRecords) setNotice(`${result.quarantinedRecords} 条历史数据因环境无法识别，已进入迁移隔离区。`)
       })
       .catch((error) => setNotice(`历史数据迁移未完成：${String(error)}`))
+    // Reload only when the persisted scope identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope?.system.id, scope?.environment.id])
 
   useEffect(() => {
@@ -125,6 +127,8 @@ export function TestDesignPage({ onNavigate }: Props) {
       setRequirement(nextVersions[0]?.content ?? '')
     })
     return () => { active = false }
+    // Local design metadata updates must not overwrite the current lifecycle state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDesign?.id])
 
   const currentVersion = versions[0]

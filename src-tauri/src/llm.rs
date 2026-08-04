@@ -25,19 +25,6 @@ impl Default for LlmConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LlmMessage {
-    pub role: String, // "user" | "assistant" | "system"
-    pub content: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LlmResponse {
-    pub content: String,
-    pub model: String,
-    pub usage_tokens: Option<u32>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 struct GeminiContent {
     parts: Vec<GeminiPart>,
 }

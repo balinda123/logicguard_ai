@@ -47,7 +47,7 @@ export function upsertTestCase(testCase: TestCase): TestCase[] {
 }
 
 export function isCaseSourceStale(
-  testCase: Pick<TestCase, 'requirementVersionId'>,
+  testCase: Pick<TestCase, 'id' | 'requirementVersionId'>,
   currentVersionId?: string,
 ): boolean {
   return Boolean(currentVersionId && testCase.requirementVersionId !== currentVersionId);

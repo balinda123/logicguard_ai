@@ -145,6 +145,7 @@ pub fn initialize_schema(conn: &Connection) -> Result<(), String> {
 fn json_text(value: &Value) -> Result<String, String> { serde_json::to_string(value).map_err(|e| e.to_string()) }
 fn plan_text(value: &ExecutionPlan) -> Result<String, String> { serde_json::to_string(value).map_err(|e| e.to_string()) }
 
+#[cfg(test)]
 pub fn insert_run_for_test(conn: &Connection, id: &str, status: RunStatus, plan: &ExecutionPlan, snapshot: &Value) -> Result<(), String> {
     conn.execute("INSERT INTO execution_runs(id,owner_id,status,snapshot_json,execution_plan_json) VALUES(?1,'test-owner',?2,?3,?4)",
         params![id, status.as_str(), json_text(snapshot)?, plan_text(plan)?]).map_err(|e| e.to_string())?;
@@ -194,6 +195,7 @@ fn events_after(conn: &Connection, run_id: &str, after: i64) -> Result<Vec<Execu
     rows.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
 }
 
+#[cfg(test)]
 pub fn replace_snapshot_for_test(conn: &Connection, id: &str, snapshot: &Value) -> Result<(), String> {
     let changed = conn.execute("UPDATE execution_runs SET snapshot_json=?1 WHERE id=?2 AND 0", params![json_text(snapshot)?, id]).map_err(|e| e.to_string())?;
     if changed == 0 { Err("SNAPSHOT_IMMUTABLE".into()) } else { Ok(()) }
@@ -315,10 +317,13 @@ impl LeaseCoordinator {
 impl RunControl {
     pub fn request_pause(&mut self) { self.pause_requested=true; }
     fn cancel(&mut self) { self.cancelled=true; }
+    #[cfg(test)]
     pub fn status_during_command(&self) -> RunStatus { if self.pause_requested { RunStatus::PauseRequested } else { RunStatus::Running } }
     pub fn after_command(&self, checkpoint:i64)->ControlDecision { if self.cancelled {ControlDecision::Cancel} else if self.pause_requested {ControlDecision::PauseAt(checkpoint)} else {ControlDecision::Continue} }
 }
+#[cfg(test)]
 pub fn resume_target(revalidation: Result<(),String>)->RunStatus { if revalidation.is_ok(){RunStatus::Queued}else{RunStatus::Blocked} }
+#[cfg(test)]
 pub fn completion_for_stop(cancelled:bool, recovered:bool)->RunStatus { if cancelled{RunStatus::Cancelled}else if recovered{RunStatus::Interrupted}else{RunStatus::Blocked} }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)] pub enum ErrorCategory { InvalidRequest, ModelResponse, RateLimited, Timeout, Connection, BusinessAssertion, Cancelled, Interrupted }

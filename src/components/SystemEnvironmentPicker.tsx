@@ -36,6 +36,8 @@ export function SystemEnvironmentPicker({ value, onChange }: Props) {
       })
       .finally(() => active && setLoading(false))
     return () => { active = false }
+    // Initial scope selection intentionally runs once; subsequent system changes use selectSystem.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {

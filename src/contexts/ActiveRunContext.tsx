@@ -139,12 +139,14 @@ export function ActiveRunProvider({ children }: { children: ReactNode }) {
   return <ActiveRunContext.Provider value={value}>{children}</ActiveRunContext.Provider>
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- provider hook belongs to this context
 export function useActiveRuns(): ActiveRunContextValue {
   const value = useContext(ActiveRunContext)
   if (!value) throw new Error('useActiveRuns must be used inside ActiveRunProvider')
   return value
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- shared run-state predicate
 export function isTerminalRun(status: ExecutionRun['status']): boolean {
   return !ACTIVE_STATUSES.has(status)
 }

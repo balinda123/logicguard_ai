@@ -10,7 +10,7 @@ import type { SystemEnvironment, TestSystem } from '../types/testDesign'
 const INITIAL_FILTERS: RunFilterValue = { systemId: 'all', environmentId: 'all', status: 'all', time: 'all' }
 
 export function Reports({ onNavigate }: { onNavigate?: (tab: string) => void }) {
-  const { runs, eventsByRun, selectedRunId, setSelectedRunId, loadRun } = useActiveRuns()
+  const { runs, eventsByRun, setSelectedRunId, loadRun } = useActiveRuns()
   const [systems, setSystems] = useState<TestSystem[]>([])
   const [environments, setEnvironments] = useState<SystemEnvironment[]>([])
   const [filters, setFilters] = useState(INITIAL_FILTERS)
