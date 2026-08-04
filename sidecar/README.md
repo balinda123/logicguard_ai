@@ -46,6 +46,20 @@ stdout 最后一行返回 JSON：
 
 `agent` 命令会额外输出 `[AGENT_STEP]{...}` 行，Rust 后端会同时读取 stdout/stderr 并解析进度。
 
+## 受限 Stagehand 协议
+
+`stagehand/protocol.js` 和 `stagehand/compiler.js` 定义了供持久化 worker 使用的 NDJSON 请求边界。当前模块已经实现并可独立测试；Task 6 接入 `stagehand/worker.js` 后才会替代现有兼容 CLI 路径。
+
+- 每个请求是一行 JSON，UTF-8 编码后最多 64 KiB；顶层必须是对象，未知命令和未知字段会被拒绝。
+- 命令闭集为 `execute`、`observe`、`act`、`agent`、`terminate`、`self_check`。
+- 确定性动作闭集为 `navigate`、`click`、`fill`、`select`、`press`、`wait`、`read`、`assert`；定位器闭集为 `role`、`label`、`text`、`placeholder`、`testId`、`css`。
+- `act` 和 `agent` 必须携带允许 origin 与正整数超时。远程 origin 仅允许 HTTPS；HTTP 仅允许显式的 `localhost`、`127.0.0.1` 或 `::1`。`agent.maxActions` 范围为 1 到 20。
+- 协议响应使用 `{ id, ok, data }` 或 `{ id, ok: false, error: { category, code, message } }`。错误类别仅为 `invalid_request`、`blocked`、`business_failed`、`cancelled`、`interrupted`，错误消息在输出前脱敏。
+
+普通 Stagehand 请求的 key 或字符串 value 不能包含 `password`、`token`、`otp`、`secret` 或 `credential`，也不能包含对应的 `{{...}}` / `${...}` 秘密占位符。登录凭据继续只走 Rust 管理的独立登录路径，不进入该协议。
+
+CSS locator 在编译阶段只执行保守的结构和安全预检：中文自然语言等非 selector 输入、未配对结构、selector 列表和危险伪类会以稳定错误码 `INVALID_CSS_LOCATOR` 提前拒绝。这不是完整 CSS parser。Task 6 的 session 必须在执行前使用页面上下文中的浏览器原生 locator/DOM selector 解析再次确认；预检通过不代表 selector 已被浏览器接受。
+
 ## 命令速查
 
 | 命令 | 用途 |
