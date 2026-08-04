@@ -21,14 +21,22 @@ function writeList<T>(name: string, items: T[]): void {
   localStorage.setItem(key(name), JSON.stringify(items));
 }
 
-export function loadTestCases(): TestCase[] {
+/** Read-only source for the Task 9 SQLite migration. */
+export function loadLegacyTestCases(): TestCase[] {
   return readList<TestCase>('test_cases');
 }
 
+/** @deprecated Legacy UI compatibility only. Delete after Task 9 switches all callers to SQLite. */
+export function loadTestCases(): TestCase[] {
+  return loadLegacyTestCases();
+}
+
+/** @deprecated Legacy UI compatibility only. Delete after Task 9 switches all callers to SQLite. */
 export function saveTestCases(cases: TestCase[]): void {
   writeList('test_cases', cases);
 }
 
+/** @deprecated Legacy UI compatibility only. Delete after Task 9 switches all callers to SQLite. */
 export function upsertTestCase(testCase: TestCase): TestCase[] {
   const cases = loadTestCases();
   const index = cases.findIndex((item) => item.id === testCase.id);
@@ -36,6 +44,13 @@ export function upsertTestCase(testCase: TestCase): TestCase[] {
   else cases.unshift(testCase);
   saveTestCases(cases);
   return cases;
+}
+
+export function isCaseSourceStale(
+  testCase: Pick<TestCase, 'requirementVersionId'>,
+  currentVersionId?: string,
+): boolean {
+  return Boolean(currentVersionId && testCase.requirementVersionId !== currentVersionId);
 }
 
 export function loadSuites(): RegressionSuite[] {
