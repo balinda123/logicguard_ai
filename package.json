@@ -12,6 +12,7 @@
     "prebuild": "node scripts/check-node-version.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "audit:hygiene": "node scripts/audit-repo-hygiene.mjs",
     "test": "vitest run",
     "preview": "vite preview",
     "pretauri": "node scripts/check-node-version.mjs",
