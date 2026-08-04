@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, ErrorCode, OptionalExtension, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -171,8 +171,21 @@ pub struct CreateRegressionConfigInput {
     pub case_ids_json: String,
 }
 
-fn db_error(_: rusqlite::Error) -> String {
-    "DATABASE_OPERATION_FAILED".to_string()
+fn db_error(error: rusqlite::Error) -> String {
+    if matches!(
+        error,
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked,
+                ..
+            },
+            _
+        )
+    ) {
+        "DATABASE_BUSY".to_string()
+    } else {
+        "DATABASE_OPERATION_FAILED".to_string()
+    }
 }
 
 fn required(value: &str, field: &str) -> Result<(), String> {
@@ -602,14 +615,16 @@ pub(crate) fn list_requirement_versions_record(
 }
 
 pub(crate) fn create_requirement_version_record(
-    conn: &Connection,
+    conn: &mut Connection,
     owner_id: &str,
     input: &CreateRequirementVersionInput,
 ) -> Result<RequirementVersion, String> {
     get_design(conn, owner_id, &input.design_id)?;
     required(&input.source_kind, "REQUIREMENT_SOURCE_KIND")?;
     required(&input.content, "REQUIREMENT_CONTENT")?;
-    let transaction = conn.unchecked_transaction().map_err(db_error)?;
+    let transaction = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db_error)?;
     let next_version: i64 = transaction
         .query_row(
             "SELECT COALESCE(MAX(version_no), 0) + 1 FROM requirement_versions WHERE design_id=?1",
@@ -674,8 +689,11 @@ pub(crate) fn create_generation_batch_record(
     required(&input.model, "GENERATION_MODEL")?;
     let requirement_design: Option<String> = conn
         .query_row(
-            "SELECT design_id FROM requirement_versions WHERE id=?1",
-            [&input.requirement_version_id],
+            "SELECT requirement.design_id
+             FROM requirement_versions requirement
+             JOIN test_designs design ON design.id=requirement.design_id
+             WHERE requirement.id=?1 AND design.owner_id=?2",
+            params![input.requirement_version_id, owner_id],
             |row| row.get(0),
         )
         .optional()
@@ -721,8 +739,11 @@ pub(crate) fn create_review_record(
     required(&input.conclusion, "REVIEW_CONCLUSION")?;
     let batch_design: Option<String> = conn
         .query_row(
-            "SELECT design_id FROM generation_batches WHERE id=?1",
-            [&input.generation_batch_id],
+            "SELECT batch.design_id
+             FROM generation_batches batch
+             JOIN test_designs design ON design.id=batch.design_id
+             WHERE batch.id=?1 AND design.owner_id=?2",
+            params![input.generation_batch_id, owner_id],
             |row| row.get(0),
         )
         .optional()
@@ -767,6 +788,19 @@ pub(crate) fn save_regression_config_record(
 ) -> Result<RegressionConfig, String> {
     get_design(conn, owner_id, &input.design_id)?;
     validate_case_ids_json(&input.case_ids_json)?;
+    if let Some(account_combination_id) = &input.account_combination_id {
+        let is_owned: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM account_combinations WHERE id=?1 AND owner_id=?2",
+                params![account_combination_id, owner_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        if is_owned.is_none() {
+            return Err("INVALID_ACCOUNT_COMBINATION".to_string());
+        }
+    }
     let existing_id: Option<String> = conn
         .query_row(
             "SELECT id FROM regression_configs WHERE design_id=?1",
@@ -882,7 +916,8 @@ pub fn create_requirement_version(
     input: CreateRequirementVersionInput,
 ) -> Result<RequirementVersion, String> {
     let owner = crate::auth::current_user_id()?;
-    create_requirement_version_record(&crate::auth::open_db(&app)?, &owner, &input)
+    let mut conn = crate::auth::open_db(&app)?;
+    create_requirement_version_record(&mut conn, &owner, &input)
 }
 
 #[tauri::command]
