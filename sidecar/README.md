@@ -38,6 +38,20 @@ or values. Login remains a separate Rust-owned compatibility flow. Deterministic
 steps use Stagehand v3 Page/Locator APIs; semantic `observe`, single-boundary
 `act`, and bounded `agent` are used only by their explicit protocol commands.
 
+The internal `set_control_marker` and `remove_control_marker` commands are owned
+by the Rust run manager. The marker has a closed `system`, `environment`, `run`,
+and `currentStep` schema and renders a fixed "自动化执行中" banner with
+`textContent`; it cannot carry HTML or credentials. Automatic account login is
+still a separate one-shot subprocess. Rust reads its payload from the OS keyring,
+passes it only through `LG_BROWSER_LOGIN_PAYLOAD`, and zeroizes the short-lived
+Rust values after use.
+
+Browser input locking is not implemented by this Node worker. On Windows, Rust
+records the PID of the dedicated Chrome it launched and disables only matching
+top-level HWNDs while CDP remains active. External CDP sessions have no trusted
+PID and are blocked. macOS and Linux currently return unsupported for automatic
+execution; they must not be described as interaction-locked.
+
 Sidecar 是 LogicGuard AI 的 Node.js 浏览器自动化子进程，由 Tauri Rust 后端调用，负责连接 Chrome/Edge 的 CDP、执行 Playwright 操作，并在需要时调用 Stagehand/Agent 能力。
 
 安装版会内置 Node Runtime、sidecar 脚本和生产依赖。最终用户不需要安装 Node.js，也不需要进入本目录执行 `npm install`。

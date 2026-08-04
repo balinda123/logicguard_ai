@@ -6,6 +6,18 @@ use crate::testing::{
     ScopeRef, UpdateTestAccountInput, UpdateWorkflowRunInput,
 };
 use rusqlite::Connection;
+use zeroize::Zeroize;
+
+#[test]
+fn browser_credential_has_an_explicit_zeroize_boundary() {
+    let mut credential = testing::StoredBrowserCredential {
+        username: "automation-user".to_string(),
+        password: "do-not-retain".to_string(),
+    };
+    credential.zeroize();
+    assert!(credential.username.is_empty());
+    assert!(credential.password.is_empty());
+}
 
 fn connection() -> Connection {
     let conn = Connection::open_in_memory().unwrap();

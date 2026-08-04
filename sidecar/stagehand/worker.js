@@ -80,6 +80,8 @@ async function dispatch(session, request) {
   if (request.command === 'observe') return session.observe(request);
   if (request.command === 'act') return session.act(request);
   if (request.command === 'agent') return session.agent(request);
+  if (request.command === 'set_control_marker') return session.setControlMarker(request.marker);
+  if (request.command === 'remove_control_marker') return session.removeControlMarker();
   if (request.command === 'self_check') return { stagehand: true, persistent: true };
   if (request.command === 'terminate') return { terminated: true };
   throw new SessionError('UNKNOWN_COMMAND');

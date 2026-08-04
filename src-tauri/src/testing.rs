@@ -2,6 +2,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
+use zeroize::Zeroize;
 
 const BUSINESS_ROLES: &[&str] = &["employee", "manager", "hrbp"];
 const LOGIN_MODES: &[&str] = &["automatic", "manual_sso", "manual_otp"];
@@ -139,6 +140,19 @@ pub(crate) struct StoredBrowserCredential {
     pub(crate) password: String,
 }
 
+impl Zeroize for StoredBrowserCredential {
+    fn zeroize(&mut self) {
+        self.username.zeroize();
+        self.password.zeroize();
+    }
+}
+
+impl Drop for StoredBrowserCredential {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 /// Combines browser metadata with an OS-keyring credential for the internal executor.
 pub(crate) struct AutomaticBrowserLogin {
     pub(crate) login_config: LoginAutomationConfig,
@@ -150,6 +164,13 @@ pub(crate) struct AutomaticBrowserLogin {
 struct StoredCredentialPayload {
     username: String,
     password: String,
+}
+
+impl Drop for StoredCredentialPayload {
+    fn drop(&mut self) {
+        self.username.zeroize();
+        self.password.zeroize();
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1144,12 +1165,14 @@ pub(crate) fn load_automatic_login(
     if account.login_mode != "automatic" {
         return Err("MANUAL_HANDOFF_REQUIRED".to_string());
     }
-    let stored = keyring::Entry::new(TEST_ACCOUNT_CREDENTIAL_SERVICE, &account.credential_ref)
+    let mut stored = keyring::Entry::new(TEST_ACCOUNT_CREDENTIAL_SERVICE, &account.credential_ref)
         .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_UNAVAILABLE".to_string())?
         .get_password()
         .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_UNAVAILABLE".to_string())?;
+    let parsed = serde_json::from_str(&stored);
+    stored.zeroize();
     let payload: StoredCredentialPayload =
-        serde_json::from_str(&stored).map_err(|_| "TEST_ACCOUNT_CREDENTIAL_INVALID".to_string())?;
+        parsed.map_err(|_| "TEST_ACCOUNT_CREDENTIAL_INVALID".to_string())?;
     validate_credential_value(&payload.username, "USERNAME")
         .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_INVALID".to_string())?;
     validate_credential_value(&payload.password, "PASSWORD")
@@ -2114,13 +2137,15 @@ pub fn set_test_account_credential(
     validate_credential_value(&password, "PASSWORD")?;
     let conn = crate::auth::open_db(&app)?;
     let account = get_test_account(&conn, &account_id)?;
-    let masked_login_name = mask_login_name(&username);
-    let serialized = serde_json::to_string(&StoredCredentialPayload { username, password })
+    let payload = StoredCredentialPayload { username, password };
+    let masked_login_name = mask_login_name(&payload.username);
+    let entry = keyring::Entry::new(TEST_ACCOUNT_CREDENTIAL_SERVICE, &account.credential_ref)
+        .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_UNAVAILABLE".to_string())?;
+    let mut serialized = serde_json::to_string(&payload)
         .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_SERIALIZATION_FAILED".to_string())?;
-    keyring::Entry::new(TEST_ACCOUNT_CREDENTIAL_SERVICE, &account.credential_ref)
-        .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_UNAVAILABLE".to_string())?
-        .set_password(&serialized)
-        .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_WRITE_FAILED".to_string())?;
+    let write_result = entry.set_password(&serialized);
+    serialized.zeroize();
+    write_result.map_err(|_| "TEST_ACCOUNT_CREDENTIAL_WRITE_FAILED".to_string())?;
     update_masked_login_name_after_credential_write(&conn, &account.id, &masked_login_name)
 }
 

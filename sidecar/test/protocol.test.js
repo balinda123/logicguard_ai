@@ -72,6 +72,26 @@ test('supports observe, terminate, and self_check with closed schemas', () => {
   assert.equal(parseRequest('{"id":"s1","command":"self_check"}').command, 'self_check');
 });
 
+test('accepts only fixed non-secret control marker fields', () => {
+  const marker = parseRequest(JSON.stringify({
+    id: 'marker-1',
+    command: 'set_control_marker',
+    marker: { system: 'OA', environment: 'staging', run: 'run-1', currentStep: 2 },
+  }));
+  assert.deepEqual(marker.marker, { system: 'OA', environment: 'staging', run: 'run-1', currentStep: 2 });
+  assert.throws(() => parseRequest(JSON.stringify({
+    id: 'marker-2',
+    command: 'set_control_marker',
+    marker: { system: 'OA', environment: 'staging', run: 'run-1', currentStep: 2, token: 'x' },
+  })), /SECRET_FIELD/);
+  assert.throws(() => parseRequest(JSON.stringify({
+    id: 'marker-3',
+    command: 'set_control_marker',
+    marker: { system: 'OA', environment: 'password=hunter2', run: 'run-1', currentStep: 2 },
+  })), /SECRET_VALUE/);
+  assert.equal(parseRequest('{"id":"marker-4","command":"remove_control_marker"}').command, 'remove_control_marker');
+});
+
 test('creates frozen envelopes with stable categories and redacted messages', () => {
   assert.deepEqual([...ERROR_CATEGORIES], ['invalid_request', 'blocked', 'business_failed', 'cancelled', 'interrupted']);
   assert.deepEqual(successEnvelope('1', { status: 'ok' }), { id: '1', ok: true, data: { status: 'ok' } });

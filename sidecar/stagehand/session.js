@@ -233,6 +233,45 @@ async function runBoundedAgent(stagehand, allowedOrigins, request, emit) {
   }
 }
 
+async function setControlMarker(stagehand, marker) {
+  const page = await activePage(stagehand);
+  await page.evaluate(value => {
+    const id = 'logicguard-controlled-browser-marker';
+    let element = document.getElementById(id);
+    if (!element) {
+      element = document.createElement('div');
+      element.id = id;
+      element.setAttribute('role', 'status');
+      Object.assign(element.style, {
+        position: 'fixed', top: '0', left: '0', right: '0', zIndex: '2147483647',
+        padding: '8px 12px', background: '#b42318', color: '#fff', font: '600 13px system-ui',
+        textAlign: 'center', pointerEvents: 'none', boxSizing: 'border-box',
+      });
+      document.documentElement.appendChild(element);
+    }
+    const label = `自动化执行中 | system: ${value.system} | env: ${value.environment} | run: ${value.run} | step: ${value.currentStep}`;
+    element.textContent = label;
+    if (!document.documentElement.dataset.logicguardOriginalTitle) {
+      document.documentElement.dataset.logicguardOriginalTitle = document.title;
+    }
+    document.title = label;
+  }, marker);
+  return { marked: true };
+}
+
+async function removeControlMarker(stagehand) {
+  const page = await activePage(stagehand);
+  await page.evaluate(() => {
+    document.getElementById('logicguard-controlled-browser-marker')?.remove();
+    const original = document.documentElement.dataset.logicguardOriginalTitle;
+    if (original !== undefined) {
+      document.title = original;
+      delete document.documentElement.dataset.logicguardOriginalTitle;
+    }
+  });
+  return { marked: false };
+}
+
 function createSession({ stagehand, allowedOrigins = [], emit = () => {} }) {
   const origins = [...new Set(allowedOrigins)];
   return {
@@ -240,6 +279,8 @@ function createSession({ stagehand, allowedOrigins = [], emit = () => {} }) {
     observe: request => observeCandidates(stagehand, origins, request),
     act: request => runBoundedAct(stagehand, origins, request),
     agent: request => runBoundedAgent(stagehand, origins, request, emit),
+    setControlMarker: marker => setControlMarker(stagehand, marker),
+    removeControlMarker: () => removeControlMarker(stagehand),
     close: () => stagehand.close(),
   };
 }

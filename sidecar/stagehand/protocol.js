@@ -11,7 +11,10 @@ const MAX_PAYLOAD_BYTES = 64 * 1024;
 const MAX_TIMEOUT_MS = 300000;
 const MAX_TEXT_LENGTH = 4096;
 const MAX_ORIGINS = 20;
-const COMMAND_VALUES = Object.freeze(['execute', 'observe', 'act', 'agent', 'terminate', 'self_check']);
+const COMMAND_VALUES = Object.freeze([
+  'execute', 'observe', 'act', 'agent', 'set_control_marker', 'remove_control_marker',
+  'terminate', 'self_check',
+]);
 const ERROR_CATEGORY_VALUES = Object.freeze([
   'invalid_request',
   'blocked',
@@ -83,6 +86,8 @@ const REQUEST_FIELDS = Object.freeze({
   observe: new Set(['id', 'command', 'instruction']),
   act: new Set(['id', 'command', 'instruction', 'allowedOrigins', 'timeoutMs']),
   agent: new Set(['id', 'command', 'goal', 'allowedOrigins', 'maxActions', 'timeoutMs']),
+  set_control_marker: new Set(['id', 'command', 'marker']),
+  remove_control_marker: new Set(['id', 'command']),
   terminate: new Set(['id', 'command']),
   self_check: new Set(['id', 'command']),
 });
@@ -125,6 +130,18 @@ function parseRequest(line) {
     }
     request.maxActions = input.maxActions;
     request.timeoutMs = normalizeTimeout(input.timeoutMs);
+  } else if (input.command === 'set_control_marker') {
+    if (!isPlainObject(input.marker)) fail('INVALID_CONTROL_MARKER');
+    assertKnownFields(input.marker, new Set(['system', 'environment', 'run', 'currentStep']));
+    if (!Number.isInteger(input.marker.currentStep) || input.marker.currentStep < 0 || input.marker.currentStep > 500) {
+      fail('INVALID_CONTROL_MARKER_STEP');
+    }
+    request.marker = {
+      system: requiredString(input.marker.system, 'INVALID_CONTROL_MARKER_SYSTEM', 128),
+      environment: requiredString(input.marker.environment, 'INVALID_CONTROL_MARKER_ENVIRONMENT', 128),
+      run: requiredString(input.marker.run, 'INVALID_CONTROL_MARKER_RUN', 128),
+      currentStep: input.marker.currentStep,
+    };
   }
   return deepFreeze(request);
 }

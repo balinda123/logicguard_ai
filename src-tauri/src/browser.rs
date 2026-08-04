@@ -19,10 +19,13 @@
 use std::process::Command;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
 use tauri::command;
 use tauri::Emitter;
 use tauri::Manager;
+use zeroize::Zeroize;
 
 // ─── 数据类型定义 ──────────────────────────────────────────────
 // 📚 这些结构体要和前端的 TypeScript 类型完全对应
@@ -93,6 +96,33 @@ struct BrowserLoginPayload {
     password: String,
 }
 
+impl Drop for BrowserLoginPayload {
+    fn drop(&mut self) {
+        self.username.zeroize();
+        self.password.zeroize();
+    }
+}
+
+struct ProcessEnvironment(Vec<(String, String)>);
+
+impl Drop for ProcessEnvironment {
+    fn drop(&mut self) {
+        for (key, value) in &mut self.0 {
+            key.zeroize();
+            value.zeroize();
+        }
+    }
+}
+
+fn dedicated_browser_processes() -> &'static Mutex<HashMap<u16, u32>> {
+    static PROCESSES: OnceLock<Mutex<HashMap<u16, u32>>> = OnceLock::new();
+    PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn dedicated_browser_pid(port: u16) -> Option<u32> {
+    dedicated_browser_processes().lock().ok()?.get(&port).copied()
+}
+
 enum TestAccountLoginOutcome {
     Completed { final_url: String },
     ManualHandoffRequired,
@@ -151,6 +181,7 @@ pub fn browser_check_sidecar() -> Result<bool, String> {
 
 fn run_sidecar(args: Vec<String>, envs: Vec<(String, String)>) -> Result<String, String> {
     let (node_cmd, sidecar_path) = runtime_assets()?;
+    let envs = ProcessEnvironment(envs);
 
     // 构建并运行命令
     // 📚 std::process::Command 是 Rust 的标准库，用来启动子进程
@@ -159,7 +190,7 @@ fn run_sidecar(args: Vec<String>, envs: Vec<(String, String)>) -> Result<String,
        .args(&args);
     
     // 注入大模型配置环境变量供 Stagehand 调用
-    for (k, v) in envs {
+    for (k, v) in &envs.0 {
         cmd.env(k, v);
     }
 
@@ -674,7 +705,7 @@ pub fn launch_chrome_cdp(app: tauri::AppHandle, port: Option<u16>, user_data_dir
     // 📚 Command::new 启动子进程
     //    .spawn() 是"启动后不等待"，让 Chrome 在后台运行
     //    （如果用 .output() 就会等 Chrome 关闭才返回，那就卡死了）
-    std::process::Command::new(&chrome_path)
+    let mut child = std::process::Command::new(&chrome_path)
         .args(&[
             &format!("--remote-debugging-port={}", cdp_port),
             &format!("--user-data-dir={}", data_dir.display()),
@@ -686,9 +717,17 @@ pub fn launch_chrome_cdp(app: tauri::AppHandle, port: Option<u16>, user_data_dir
         ])
         .spawn()
         .map_err(|e| format!("启动 Chrome 失败: {}\nChrome 路径: {}", e, chrome_path))?;
+    let browser_pid = child.id();
 
     // 等一秒让 Chrome 初始化
     std::thread::sleep(Duration::from_millis(1000));
+    if child.try_wait().map_err(|_| "BROWSER_PROCESS_CHECK_FAILED".to_string())?.is_some() {
+        return Err("BROWSER_PROCESS_EXITED".to_string());
+    }
+    dedicated_browser_processes()
+        .lock()
+        .map_err(|_| "BROWSER_PROCESS_REGISTRY_UNAVAILABLE".to_string())?
+        .insert(cdp_port, browser_pid);
 
     Ok(format!(
         "Chrome 已启动！\n\n📍 CDP 端口: {}\n📂 Profile 目录: {}\n\n请在弹出的 Chrome 窗口中登录您的 OA/SSO 系统，\n登录后 LogicGuard AI 就可以复用您的登录状态了。",

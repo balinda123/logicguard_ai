@@ -143,3 +143,40 @@ test('worker closes on EOF and never leaks rejected secret input', async () => {
   assert.equal(JSON.parse(raw).error.category, 'invalid_request');
   assert.equal(fake.calls.filter(([name]) => name === 'close').length, 1);
 });
+
+test('worker injects a fixed control marker without sensitive fields', async () => {
+  const fake = createFakeStagehand();
+  const input = Readable.from([
+    '{"id":"m1","command":"set_control_marker","marker":{"system":"OA","environment":"test","run":"run-1","currentStep":3}}\n',
+    '{"id":"m2","command":"remove_control_marker"}\n',
+    '{"id":"t1","command":"terminate"}\n',
+  ]);
+  const output = new PassThrough();
+  let raw = '';
+  output.on('data', chunk => { raw += chunk; });
+
+  await runWorker({ input, output, diagnostics: new PassThrough(), stagehand: fake });
+
+  const evaluations = fake.calls.filter(([name]) => name === 'evaluate');
+  assert.equal(evaluations.length, 2);
+  assert.doesNotMatch(JSON.stringify(evaluations), /password|token|otp|secret|credential/i);
+  assert.equal(raw.trim().split('\n').map(JSON.parse).every(line => line.ok), true);
+});
+
+test('worker rejects credential-shaped fields before dispatch', async () => {
+  const fake = createFakeStagehand();
+  const input = Readable.from([
+    '{"id":"bad","command":"self_check","credential":"do-not-log"}\n',
+  ]);
+  const output = new PassThrough();
+  const diagnostics = new PassThrough();
+  let raw = '';
+  let stderr = '';
+  output.on('data', chunk => { raw += chunk; });
+  diagnostics.on('data', chunk => { stderr += chunk; });
+
+  await runWorker({ input, output, diagnostics, stagehand: fake });
+
+  assert.doesNotMatch(raw + stderr, /do-not-log/);
+  assert.equal(JSON.parse(raw).error.category, 'invalid_request');
+});

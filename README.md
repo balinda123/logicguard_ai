@@ -4,6 +4,8 @@
 
 ## 当前能力
 
+> 自动执行的浏览器输入保护当前仅支持 Windows。必须由应用“一键启动受控浏览器”创建专用 Chrome Profile 并登记进程 PID；外部 CDP 浏览器、PID/顶层窗口校验失败，或 macOS/Linux 上尝试自动执行时，运行会以 `BROWSER_INTERACTION_LOCK_UNAVAILABLE` 进入 blocked，不会下发页面动作。Windows 保护只禁用该专用浏览器的顶层窗口输入，不安装全局键鼠 hook；Stagehand/CDP 后台通信仍可继续。
+
 - 多账号流程测试：管理员配置员工、上级和 HRBP 测试账号；已确认用例可转换为单角色、权限、多角色流程或分支场景
 - 安全执行中心：自动账号在单一受控浏览器中按角色切换；SSO/验证码场景停在人工交接后继续；仅业务断言失败保存截图
 - 问题跟踪：失败自动生成待确认草稿，确认后进入修复/验证生命周期，支持筛选并导出 Excel 或 CSV
@@ -60,6 +62,7 @@ Chrome / Edge
 8. 如需部门测试流程，进入“测试设计”按“需求来源 → 生成用例 → 检查确认 → 回归执行”操作；需求来源可直接粘贴，也可输入 HTTP(S) 需求地址，通过受控浏览器抓取正文并建模为场景模板。详细步骤见 [OpenMontage使用指南.md](./OpenMontage使用指南.md)。
 
 API Key 和测试账号真实凭据不写入 localStorage、SQLite、日志、报告或导出文件；它们仅保存在 Windows Credential Manager 或 macOS Keychain。登录是本机应用级隔离，不用于抵御拥有操作系统管理员权限的攻击者。
+自动执行期间，受控页面顶部和标题显示“自动化执行中”以及 system/environment/run/step 标识；标识协议不接受密码、令牌、OTP、secret、credential 或对应占位符。测试账号凭据只由 Rust 从系统凭据库短暂读取，经独立登录子进程传递并在使用后 zeroize，不进入普通 Stagehand 请求。
 人事测试环境默认按敏感数据处理；严格脱敏只能降低传给模型的文本风险，仍建议测试环境使用虚构员工数据。
 
 ## 本地开发

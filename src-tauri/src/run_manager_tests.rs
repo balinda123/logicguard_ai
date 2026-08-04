@@ -61,6 +61,23 @@ fn coordinator_grants_only_one_browser_lease() {
 }
 
 #[test]
+fn pause_handoff_terminal_and_watchdog_states_release_browser_input() {
+    assert!(!releases_interaction_guard(RunStatus::Running));
+    assert!(!releases_interaction_guard(RunStatus::PauseRequested));
+    assert!(releases_interaction_guard(RunStatus::Paused));
+    assert!(releases_interaction_guard(RunStatus::WaitingHandoff));
+    assert!(releases_interaction_guard(RunStatus::Passed));
+    assert!(releases_interaction_guard(RunStatus::Blocked));
+    assert!(releases_interaction_guard(RunStatus::Interrupted));
+}
+
+#[test]
+fn a_run_cannot_enter_running_without_the_browser_guard() {
+    assert_eq!(status_after_guard_acquisition(false), RunStatus::Blocked);
+    assert_eq!(status_after_guard_acquisition(true), RunStatus::Running);
+}
+
+#[test]
 fn resume_revalidation_failure_becomes_blocked() {
     assert_eq!(resume_target(Err("origin unavailable".into())), RunStatus::Blocked);
     assert_eq!(resume_target(Ok(())), RunStatus::Queued);

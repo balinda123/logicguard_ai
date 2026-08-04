@@ -1,5 +1,6 @@
 mod auth;
 mod browser;
+mod interaction_guard;
 mod llm;
 mod reports;
 mod run_manager;
@@ -15,6 +16,9 @@ mod testing_tests;
 
 #[cfg(test)]
 mod run_manager_tests;
+
+#[cfg(test)]
+mod interaction_guard_tests;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
