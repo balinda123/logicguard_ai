@@ -21,12 +21,31 @@ function writeList<T>(name: string, items: T[]): void {
   localStorage.setItem(key(name), JSON.stringify(items));
 }
 
+function isLegacyPlaceholderCase(testCase: TestCase): boolean {
+  const knownLegacyCase = !testCase.templateId && (
+    testCase.title?.trim() === '正常流程测试'
+    || (
+      testCase.requirementTitle?.trim().includes('入职登记表问题')
+      && testCase.riskPoint?.trim().includes('需求覆盖不足')
+      && !testCase.expectedResult?.trim()
+    )
+  );
+  const generatedGenericCase = testCase.expectedResult === '系统行为符合需求。'
+    && testCase.riskPoint?.endsWith('覆盖不足')
+    && testCase.steps?.some((step) => step.action.includes('场景填写或查询测试数据'))
+    && testCase.steps?.some((step) => step.action === '提交或保存后检查结果');
+  return knownLegacyCase || generatedGenericCase;
+}
+
 export function loadTestCases(): TestCase[] {
-  return readList<TestCase>('test_cases');
+  const cases = readList<TestCase>('test_cases');
+  const filtered = cases.filter((testCase) => !isLegacyPlaceholderCase(testCase));
+  if (filtered.length !== cases.length) writeList('test_cases', filtered);
+  return filtered;
 }
 
 export function saveTestCases(cases: TestCase[]): void {
-  writeList('test_cases', cases);
+  writeList('test_cases', cases.filter((testCase) => !isLegacyPlaceholderCase(testCase)));
 }
 
 export function upsertTestCase(testCase: TestCase): TestCase[] {

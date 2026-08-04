@@ -1,0 +1,4 @@
+interface:
+  display_name: "中文 Git 提交规范"
+  short_description: "强制 LogicGuard AI 的提交说明使用中文"
+  default_prompt: "检查暂存改动，并使用准确、简洁的中文提交说明创建 Git 提交。"

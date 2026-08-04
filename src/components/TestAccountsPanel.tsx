@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
-import { KeyRound, Pencil, Plus, RefreshCw, UserRoundX } from 'lucide-react'
+import { AlertCircle, ChevronDown, KeyRound, Pencil, Plus, RefreshCw, UserRoundX } from 'lucide-react'
 
 import {
   createTestAccount,
@@ -12,7 +12,11 @@ import type { BusinessRole, LoginAutomationConfig, LoginMode, TestAccount } from
 
 interface TestAccountsPanelProps {
   canManage: boolean
+  onAccountsChanged?: (accounts: TestAccount[]) => void
 }
+
+type AccountField = 'displayName' | 'loginUrl' | 'username' | 'password'
+type AccountFieldErrors = Partial<Record<AccountField, string>>
 
 const ROLE_LABEL: Record<BusinessRole, string> = {
   employee: '员工',
@@ -55,23 +59,30 @@ function hasHttpLoginUrl(config: LoginAutomationConfig): boolean {
   }
 }
 
-export function TestAccountsPanel({ canManage }: TestAccountsPanelProps) {
+export function TestAccountsPanel({ canManage, onAccountsChanged }: TestAccountsPanelProps) {
   const [accounts, setAccounts] = useState<TestAccount[]>([])
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState('')
+  const [formError, setFormError] = useState('')
+  const [fieldErrors, setFieldErrors] = useState<AccountFieldErrors>({})
   const [editingAccount, setEditingAccount] = useState<TestAccount | null>(null)
   const [creating, setCreating] = useState(false)
   const [loginMode, setLoginMode] = useState<LoginMode>('automatic')
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const formRef = useRef<HTMLFormElement>(null)
 
   const refreshAccounts = async () => {
     setLoading(true)
     try {
-      setAccounts(await listTestAccounts())
+      const nextAccounts = await listTestAccounts()
+      setAccounts(nextAccounts)
+      onAccountsChanged?.(nextAccounts)
       setNotice('')
+      return true
     } catch {
       setNotice('测试账号加载失败，请刷新后重试。')
+      return false
     } finally {
       setLoading(false)
     }
@@ -85,18 +96,27 @@ export function TestAccountsPanel({ canManage }: TestAccountsPanelProps) {
     formRef.current?.reset()
     setEditingAccount(null)
     setCreating(false)
+    setFormError('')
+    setFieldErrors({})
+    setAdvancedOpen(false)
   }
 
   const openCreate = () => {
     setNotice('')
     setEditingAccount(null)
     setLoginMode('automatic')
+    setFormError('')
+    setFieldErrors({})
+    setAdvancedOpen(false)
     setCreating(true)
   }
 
   const openEdit = (account: TestAccount) => {
     setNotice('')
     setLoginMode(account.loginMode)
+    setFormError('')
+    setFieldErrors({})
+    setAdvancedOpen(false)
     setEditingAccount(account)
     setCreating(false)
   }
@@ -106,21 +126,39 @@ export function TestAccountsPanel({ canManage }: TestAccountsPanelProps) {
     const formData = new FormData(event.currentTarget)
     const displayName = readField(formData, 'displayName')
     const role = readField(formData, 'role') as BusinessRole
-    const config = loginConfigFrom(formData)
+    const submittedConfig = loginConfigFrom(formData)
+    const config = editingAccount && !advancedOpen
+      ? { ...editingAccount.loginConfig, loginUrl: submittedConfig.loginUrl }
+      : submittedConfig
     const username = String(formData.get('username') ?? '')
     const password = String(formData.get('password') ?? '')
 
-    if (!displayName || !hasHttpLoginUrl(config)) {
-      setNotice('请填写账号显示名和有效的 http(s) 登录地址。')
-      return
+    const errors: AccountFieldErrors = {}
+    if (!displayName) errors.displayName = '请填写账号显示名'
+    if (!hasHttpLoginUrl(config)) errors.loginUrl = '请填写有效的 http(s) 登录地址'
+    if (loginMode === 'automatic') {
+      const credentialRequired = creating || editingAccount?.maskedLoginName === 'not-configured'
+      if ((credentialRequired && !username) || (!username && Boolean(password))) errors.username = '请填写账号用户名'
+      if ((credentialRequired && !password) || (Boolean(username) && !password)) errors.password = '请填写账号密码'
     }
-    if (loginMode === 'automatic' && ((creating && (!username || !password)) || Boolean(username) !== Boolean(password))) {
-      setNotice('自动登录账号需要同时填写用户名和密码。')
+    if (Object.keys(errors).length > 0) {
+      const missingCredentials = errors.username && errors.password
+      setFieldErrors(errors)
+      setFormError(missingCredentials ? '请填写账号用户名和账号密码。' : Object.values(errors)[0] ?? '请检查表单。')
+      const firstInvalid = (['displayName', 'loginUrl', 'username', 'password'] as AccountField[])
+        .find(field => errors[field])
+      const field = firstInvalid ? formRef.current?.elements.namedItem(firstInvalid) : null
+      if (field instanceof HTMLElement) {
+        field.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+        field.focus()
+      }
       return
     }
 
     setSaving(true)
     setNotice('')
+    setFormError('')
+    setFieldErrors({})
     try {
       const input = { displayName, role, loginMode, loginConfig: config }
       const saved = editingAccount
@@ -129,12 +167,13 @@ export function TestAccountsPanel({ canManage }: TestAccountsPanelProps) {
       if (loginMode === 'automatic' && username && password) {
         await setTestAccountCredential(saved.id, username, password)
       }
-      formRef.current?.reset()
-      await refreshAccounts()
-      setNotice('测试账号已保存。')
+      const refreshed = await refreshAccounts()
+      if (refreshed) {
+        closeEditor()
+        setNotice('测试账号已保存。')
+      }
     } catch {
-      formRef.current?.reset()
-      setNotice('测试账号保存失败，请检查配置后重试。')
+      setFormError('测试账号保存失败，请检查配置后重试。')
     } finally {
       setSaving(false)
     }
@@ -182,17 +221,24 @@ export function TestAccountsPanel({ canManage }: TestAccountsPanelProps) {
 
       {editorOpen && canManage && <div role="dialog" aria-modal="true" aria-label="测试账号编辑" className="space-y-4 rounded-lg border border-brand-500/30 bg-surface-2 p-4">
         <div className="flex items-center justify-between gap-3 border-b border-border pb-3"><div><h4 className="text-sm font-bold text-text-primary">{editingAccount ? '编辑测试账号' : '新增测试账号'}</h4><p className="mt-1 text-[10px] text-text-muted">登录选择器只用于自动化定位，不填写任何真实凭据。</p></div><button type="button" onClick={closeEditor} className="text-xs text-text-muted hover:text-text-primary">关闭</button></div>
-        <form ref={formRef} onSubmit={event => void handleSave(event)} className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <label className="block"><span className="mb-1 block text-[10px] text-text-secondary">显示名</span><input name="displayName" aria-label="账号显示名" defaultValue={initial?.displayName ?? ''} required className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500" /></label>
+        <form ref={formRef} noValidate onSubmit={event => void handleSave(event)} className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {formError && <div role="alert" className="col-span-full flex items-start gap-2 rounded-lg border border-error/40 bg-error/10 px-3 py-2.5 text-xs font-medium text-error"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{formError}</span></div>}
+          <label className="block"><span className="mb-1 block text-[10px] text-text-secondary">显示名</span><input name="displayName" aria-label="账号显示名" aria-invalid={Boolean(fieldErrors.displayName)} defaultValue={initial?.displayName ?? ''} className={`h-9 w-full rounded-lg border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500 ${fieldErrors.displayName ? 'border-error' : 'border-border'}`} />{fieldErrors.displayName && <span className="mt-1 block text-[10px] text-error">{fieldErrors.displayName}</span>}</label>
           <label className="block"><span className="mb-1 block text-[10px] text-text-secondary">业务角色</span><select name="role" aria-label="业务角色" defaultValue={initial?.role ?? 'employee'} className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500"><option value="employee">员工</option><option value="manager">上级</option><option value="hrbp">HRBP</option></select></label>
-          <label className="block"><span className="mb-1 block text-[10px] text-text-secondary">登录方式</span><select name="loginMode" aria-label="登录方式" value={loginMode} onChange={event => setLoginMode(event.target.value as LoginMode)} className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500"><option value="automatic">自动登录</option><option value="manual_sso">SSO 手动登录</option><option value="manual_otp">验证码手动登录</option></select></label>
-          <label className="block"><span className="mb-1 block text-[10px] text-text-secondary">登录地址</span><input name="loginUrl" aria-label="登录地址" type="url" defaultValue={initial?.loginConfig.loginUrl ?? ''} required placeholder="https://example.test/login" className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500" /></label>
-          <label className="block"><span className="mb-1 block text-[10px] text-text-secondary">页面选择器</span><input name="pageSelector" aria-label="页面选择器" defaultValue={initial?.loginConfig.pageSelector ?? ''} placeholder="#login-page" className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500" /></label>
+          <label className="block"><span className="mb-1 block text-[10px] text-text-secondary">登录方式</span><select name="loginMode" aria-label="登录方式" value={loginMode} onChange={event => { setLoginMode(event.target.value as LoginMode); setFormError(''); setFieldErrors({}) }} className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500"><option value="automatic">自动登录</option><option value="manual_sso">SSO 手动登录</option><option value="manual_otp">验证码手动登录</option></select></label>
+          <label className="block"><span className="mb-1 block text-[10px] text-text-secondary">登录地址</span><input name="loginUrl" aria-label="登录地址" aria-invalid={Boolean(fieldErrors.loginUrl)} type="url" defaultValue={initial?.loginConfig.loginUrl ?? ''} placeholder="https://example.test/login" className={`h-9 w-full rounded-lg border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500 ${fieldErrors.loginUrl ? 'border-error' : 'border-border'}`} />{fieldErrors.loginUrl && <span className="mt-1 block text-[10px] text-error">{fieldErrors.loginUrl}</span>}</label>
+          {loginMode === 'automatic' && <>
+          <div className="md:col-span-2 grid grid-cols-1 gap-3 border-t border-border pt-3 md:grid-cols-2"><label className="block"><span className="mb-1 block text-[10px] text-text-secondary">账号用户名</span><input name="username" aria-label="账号用户名" aria-invalid={Boolean(fieldErrors.username)} autoComplete="off" className={`h-9 w-full rounded-lg border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500 ${fieldErrors.username ? 'border-error' : 'border-border'}`} />{fieldErrors.username && <span className="mt-1 block text-[10px] text-error">{fieldErrors.username}</span>}</label><label className="block"><span className="mb-1 block text-[10px] text-text-secondary">账号密码</span><input name="password" aria-label="账号密码" aria-invalid={Boolean(fieldErrors.password)} type="password" autoComplete="new-password" className={`h-9 w-full rounded-lg border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500 ${fieldErrors.password ? 'border-error' : 'border-border'}`} />{fieldErrors.password && <span className="mt-1 block text-[10px] text-error">{fieldErrors.password}</span>}</label><p className="md:col-span-2 text-[10px] text-text-muted">保存后直接写入系统凭据库，页面不会回显或保存该信息。</p></div>
+          <button type="button" aria-expanded={advancedOpen} onClick={() => setAdvancedOpen(value => !value)} className="col-span-full flex h-9 items-center justify-between rounded-lg border border-border bg-surface-1 px-3 text-xs font-medium text-text-secondary hover:text-text-primary"><span>高级设置（可选）</span><ChevronDown className={`h-4 w-4 transition-transform ${advancedOpen ? 'rotate-180' : ''}`} /></button>
+          {advancedOpen && <div className="col-span-full grid grid-cols-1 gap-3 rounded-lg border border-border bg-surface-1/60 p-3 md:grid-cols-2">
+          <p className="md:col-span-2 text-[10px] text-text-muted">系统会优先自动识别登录控件；仅在页面结构特殊或需要固定定位时填写选择器。</p>
+          <label className="block"><span className="mb-1 block text-[10px] text-text-secondary">页面选择器（可选）</span><input name="pageSelector" aria-label="页面选择器" defaultValue={initial?.loginConfig.pageSelector ?? ''} placeholder="#login-page" className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500" /></label>
           <label className="block"><span className="mb-1 block text-[10px] text-text-secondary">用户名选择器</span><input name="usernameSelector" aria-label="用户名选择器" defaultValue={initial?.loginConfig.usernameSelector ?? ''} placeholder="input[name=username]" className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500" /></label>
           <label className="block"><span className="mb-1 block text-[10px] text-text-secondary">密码选择器</span><input name="passwordSelector" aria-label="密码选择器" defaultValue={initial?.loginConfig.passwordSelector ?? ''} placeholder="input[type=password]" className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500" /></label>
           <label className="block"><span className="mb-1 block text-[10px] text-text-secondary">提交选择器</span><input name="submitSelector" aria-label="提交选择器" defaultValue={initial?.loginConfig.submitSelector ?? ''} placeholder="button[type=submit]" className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500" /></label>
           <label className="block md:col-span-2"><span className="mb-1 block text-[10px] text-text-secondary">登录成功选择器</span><input name="successSelector" aria-label="登录成功选择器" defaultValue={initial?.loginConfig.successSelector ?? ''} placeholder="[data-testid=home]" className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500" /></label>
-          {loginMode === 'automatic' && <div className="md:col-span-2 grid grid-cols-1 gap-3 border-t border-border pt-3 md:grid-cols-2"><label className="block"><span className="mb-1 block text-[10px] text-text-secondary">账号用户名</span><input name="username" aria-label="账号用户名" autoComplete="off" className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500" /></label><label className="block"><span className="mb-1 block text-[10px] text-text-secondary">账号密码</span><input name="password" aria-label="账号密码" type="password" autoComplete="new-password" className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none focus:border-brand-500" /></label><p className="md:col-span-2 text-[10px] text-text-muted">保存后直接写入系统凭据库，页面不会回显或保存该信息。</p></div>}
+          </div>}
+          </>}
           <div className="col-span-full flex justify-end gap-2 border-t border-border pt-3"><button type="button" onClick={closeEditor} className="h-8 rounded-lg border border-border px-3 text-xs text-text-secondary hover:text-text-primary">取消</button><button type="submit" disabled={saving} className="flex h-8 items-center gap-1.5 rounded-lg bg-brand-500 px-3 text-xs font-semibold text-white hover:bg-brand-600 disabled:opacity-50">{saving && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}保存测试账号</button></div>
         </form>
       </div>}

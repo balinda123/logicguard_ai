@@ -11,6 +11,8 @@ pub struct LlmConfig {
     pub api_key: Option<String>,
     pub base_url: Option<String>, // for custom OpenAI-compat endpoints
     pub model: String,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 impl Default for LlmConfig {
@@ -20,6 +22,7 @@ impl Default for LlmConfig {
             api_key: None,
             base_url: None,
             model: "gemini-2.0-flash".to_string(),
+            reasoning_effort: None,
         }
     }
 }
@@ -183,16 +186,154 @@ pub async fn call_ollama(
 // OpenAI-compatible API (e.g. DeepSeek, Qwen API)
 // =============================================
 
+const NON_JSON_RESPONSE_PREFIX: &str = "API returned non-JSON response";
+
+fn response_preview(body: &str) -> String {
+    const MAX_CHARS: usize = 360;
+    let compact = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = compact.chars();
+    let preview: String = chars.by_ref().take(MAX_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{}...", preview)
+    } else {
+        preview
+    }
+}
+
+fn parse_openai_compat_response(
+    status: reqwest::StatusCode,
+    content_type: Option<&str>,
+    body: &str,
+) -> Result<String, String> {
+    let preview = response_preview(body);
+    if !status.is_success() {
+        return Err(format!("API error {}: {}", status, preview));
+    }
+
+    let resp_json: serde_json::Value = serde_json::from_str(body).map_err(|error| {
+        format!(
+            "{} (status {}, content-type {}): {} ({})",
+            NON_JSON_RESPONSE_PREFIX,
+            status,
+            content_type.unwrap_or("unknown"),
+            error,
+            preview,
+        )
+    })?;
+
+    resp_json["choices"][0]["message"]["content"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            let keys = resp_json
+                .as_object()
+                .map(|object| object.keys().cloned().collect::<Vec<_>>().join(", "))
+                .unwrap_or_else(|| "non-object JSON".to_string());
+            format!("Missing choices[0].message.content in API response (top-level keys: {})", keys)
+        })
+}
+
+async fn request_openai_compat(
+    client: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+    body: &serde_json::Value,
+) -> Result<String, String> {
+    let response = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(body)
+        .send()
+        .await
+        .map_err(|error| format!("API HTTP error: {}", error))?;
+
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let response_body = response
+        .text()
+        .await
+        .map_err(|error| format!("API response read error: {}", error))?;
+
+    parse_openai_compat_response(status, content_type.as_deref(), &response_body)
+}
+
+fn parse_openai_compat_model_ids(body: &str) -> Result<Vec<String>, String> {
+    let response: serde_json::Value = serde_json::from_str(body)
+        .map_err(|error| format!("Model list response is not JSON: {} ({})", error, response_preview(body)))?;
+    let entries = response["data"]
+        .as_array()
+        .ok_or_else(|| "Model list response is missing data[]".to_string())?;
+    let mut model_ids = entries
+        .iter()
+        .filter_map(|entry| entry["id"].as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    model_ids.sort();
+    model_ids.dedup();
+    if model_ids.is_empty() {
+        return Err("Model list response contains no model IDs".to_string());
+    }
+    Ok(model_ids)
+}
+
+fn should_send_reasoning_effort(model: &str, reasoning_effort: Option<&str>) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    let effort = reasoning_effort.unwrap_or("").trim();
+    let valid_effort = matches!(effort, "low" | "medium" | "high" | "xhigh");
+    valid_effort && (model.starts_with("gpt-5") || model.starts_with('o') || model.contains("codex"))
+}
+
+#[command]
+pub async fn list_openai_compat_models(config: LlmConfig) -> Result<Vec<String>, String> {
+    if config.provider != "openai_compat" {
+        return Err("Only OpenAI-compatible providers support model discovery".to_string());
+    }
+    let api_key = config.api_key.clone().map(Ok).unwrap_or_else(crate::auth::current_api_key)?;
+    let base_url = config
+        .base_url
+        .as_deref()
+        .ok_or("base_url not configured for openai_compat")?
+        .trim_end_matches('/');
+    let url = if base_url.ends_with("/v1") {
+        format!("{}/models", base_url)
+    } else {
+        format!("{}/v1/models", base_url)
+    };
+    let response = reqwest::Client::new()
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+        .map_err(|error| format!("Model list HTTP error: {}", error))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("Model list response read error: {}", error))?;
+    if !status.is_success() {
+        return Err(format!("Model list API error {}: {}", status, response_preview(&body)));
+    }
+    parse_openai_compat_model_ids(&body)
+}
+
 pub async fn call_openai_compat(
     prompt: &str,
     api_key: &str,
     base_url: &str,
     model: &str,
+    reasoning_effort: Option<&str>,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let normalized_base_url = base_url.trim_end_matches('/');
+    let url = format!("{}/chat/completions", normalized_base_url);
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "messages": [
             {"role": "user", "content": prompt}
@@ -201,32 +342,67 @@ pub async fn call_openai_compat(
         "max_tokens": 4096,
         "response_format": {"type": "json_object"}
     });
-
-    let response = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("API HTTP error: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, body));
+    if should_send_reasoning_effort(model, reasoning_effort) {
+        body["reasoning_effort"] = serde_json::Value::String(
+            reasoning_effort.unwrap_or_default().trim().to_string(),
+        );
     }
 
-    let resp_json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Parse error: {}", e))?;
+    match request_openai_compat(&client, &url, api_key, &body).await {
+        Ok(text) => Ok(text),
+        Err(primary_error)
+            if primary_error.starts_with(NON_JSON_RESPONSE_PREFIX)
+                && !normalized_base_url.ends_with("/v1") =>
+        {
+            let v1_url = format!("{}/v1/chat/completions", normalized_base_url);
+            request_openai_compat(&client, &v1_url, api_key, &body)
+                .await
+                .map_err(|fallback_error| {
+                    format!(
+                        "{}; retrying {} failed: {}",
+                        primary_error, v1_url, fallback_error
+                    )
+                })
+        }
+        Err(error) => Err(error),
+    }
+}
 
-    let text = resp_json["choices"][0]["message"]["content"]
-        .as_str()
-        .ok_or_else(|| "Missing content in response".to_string())?
-        .to_string();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    Ok(text)
+    #[test]
+    fn explains_non_json_gateway_response_without_hiding_its_type() {
+        let error = parse_openai_compat_response(
+            reqwest::StatusCode::OK,
+            Some("text/html"),
+            "<html><title>Route not found</title></html>",
+        )
+        .unwrap_err();
+
+        assert!(error.contains("non-JSON"));
+        assert!(error.contains("text/html"));
+        assert!(error.contains("Route not found"));
+    }
+
+    #[test]
+    fn reads_model_ids_from_an_openai_compatible_models_response() {
+        let models = parse_openai_compat_model_ids(
+            r#"{"object":"list","data":[{"id":"company-gpt-4o"},{"id":"company-gpt-4.1-mini"}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(models, vec!["company-gpt-4o", "company-gpt-4.1-mini"]);
+    }
+
+    #[test]
+    fn sends_reasoning_effort_only_to_reasoning_capable_models() {
+        assert!(should_send_reasoning_effort("gpt-5.6-luna", Some("xhigh")));
+        assert!(should_send_reasoning_effort("o4-mini", Some("high")));
+        assert!(!should_send_reasoning_effort("gpt-4o", Some("high")));
+        assert!(!should_send_reasoning_effort("gpt-5.6-luna", None));
+    }
 }
 
 // =============================================
@@ -254,7 +430,14 @@ pub async fn route_llm(prompt: &str, config: &LlmConfig) -> Result<String, Strin
                 .base_url
                 .as_deref()
                 .ok_or("base_url not configured for openai_compat")?;
-            call_openai_compat(prompt, &api_key, base_url, &config.model).await
+            call_openai_compat(
+                prompt,
+                &api_key,
+                base_url,
+                &config.model,
+                config.reasoning_effort.as_deref(),
+            )
+            .await
         }
         other => Err(format!("Unknown LLM provider: {}", other)),
     }
@@ -276,6 +459,18 @@ pub async fn test_llm_connection(config: LlmConfig) -> Result<String, String> {
 pub async fn plan_task(user_intent: String, context: String, config: LlmConfig) -> Result<String, String> {
     let system_prompt = build_planner_prompt(&user_intent, &context);
     route_llm(&system_prompt, &config).await
+}
+
+/// Generate a scenario template without applying the browser planner protocol.
+#[command]
+pub async fn generate_template(prompt: String, config: LlmConfig) -> Result<String, String> {
+    route_llm(&prompt, &config).await
+}
+
+/// Generate test cases without applying the browser planner protocol.
+#[command]
+pub async fn generate_test_cases(prompt: String, config: LlmConfig) -> Result<String, String> {
+    route_llm(&prompt, &config).await
 }
 
 /// Generate action for a specific step given DOM context

@@ -779,9 +779,10 @@ pub(crate) fn list_test_accounts_record(conn: &Connection) -> Result<Vec<TestAcc
     let mut statement = conn
         .prepare("SELECT id, display_name, business_role, masked_login_name, credential_ref, login_mode, login_config_json, is_enabled, created_at, updated_at FROM test_accounts ORDER BY is_enabled DESC, business_role, display_name")
         .map_err(db_error)?;
-    statement
+    let rows = statement
         .query_map([], read_test_account)
-        .map_err(db_error)?
+        .map_err(db_error)?;
+    rows
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(db_error)
 }
@@ -936,9 +937,10 @@ pub(crate) fn list_account_combinations_record(
     let mut statement = conn
         .prepare("SELECT id, name, employee_account_id, manager_account_id, hrbp_account_id, created_at, updated_at FROM account_combinations WHERE owner_id=?1 ORDER BY updated_at DESC, name")
         .map_err(db_error)?;
-    statement
+    let rows = statement
         .query_map([owner_id], read_account_combination)
-        .map_err(db_error)?
+        .map_err(db_error)?;
+    rows
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(db_error)
 }
@@ -1021,9 +1023,10 @@ pub(crate) fn list_workflow_scenarios_record(
     let mut statement = conn
         .prepare("SELECT id, name, scenario_kind, source_test_case_id, business_tags_json, preconditions_json, steps_json, created_at, updated_at FROM workflow_scenarios WHERE owner_id=?1 ORDER BY updated_at DESC, name")
         .map_err(db_error)?;
-    statement
+    let rows = statement
         .query_map([owner_id], read_workflow_scenario)
-        .map_err(db_error)?
+        .map_err(db_error)?;
+    rows
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(db_error)
 }
@@ -1198,9 +1201,10 @@ pub(crate) fn list_workflow_runs_record(
     let mut statement = conn
         .prepare("SELECT id, scenario_id, account_combination_id, status, current_step_order, started_at, finished_at, created_at, updated_at FROM workflow_runs WHERE owner_id=?1 ORDER BY created_at DESC")
         .map_err(db_error)?;
-    statement
+    let rows = statement
         .query_map([owner_id], read_workflow_run)
-        .map_err(db_error)?
+        .map_err(db_error)?;
+    rows
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(db_error)
 }
@@ -1256,9 +1260,10 @@ pub(crate) fn list_workflow_run_events_record(
     let mut statement = conn
         .prepare("SELECT id, run_id, sequence_no, phase, business_role, message, created_at FROM workflow_events WHERE run_id=?1 AND owner_id=?2 ORDER BY sequence_no")
         .map_err(db_error)?;
-    statement
+    let rows = statement
         .query_map(params![run_id, owner_id], read_workflow_event)
-        .map_err(db_error)?
+        .map_err(db_error)?;
+    rows
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(db_error)
 }
@@ -1336,9 +1341,10 @@ pub(crate) fn list_failure_evidence_record(
             "SELECT id, run_id, step_id, expected_value, actual_value, screenshot_path, created_at FROM failure_evidence WHERE owner_id=?1 AND (?2 IS NULL OR run_id=?2) ORDER BY created_at DESC",
         )
         .map_err(db_error)?;
-    statement
+    let rows = statement
         .query_map(params![owner_id, run_id], read_failure_evidence)
-        .map_err(db_error)?
+        .map_err(db_error)?;
+    rows
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(db_error)
 }
@@ -1435,9 +1441,10 @@ pub(crate) fn list_defect_drafts_record(
     let mut statement = conn
         .prepare("SELECT id, scenario_id, run_id, evidence_id, status, title, reproduction_steps_json, expected_result, actual_result, impact_summary, business_role, created_at, updated_at FROM defect_drafts WHERE owner_id=?1 ORDER BY updated_at DESC")
         .map_err(db_error)?;
-    statement
+    let rows = statement
         .query_map([owner_id], read_defect_draft)
-        .map_err(db_error)?
+        .map_err(db_error)?;
+    rows
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(db_error)
 }

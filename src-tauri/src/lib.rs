@@ -62,7 +62,10 @@ pub fn run() {
             storage::open_app_data_dir,
             // LLM 大模型相关命令
             llm::test_llm_connection,
+            llm::list_openai_compat_models,
             llm::plan_task,
+            llm::generate_template,
+            llm::generate_test_cases,
             llm::generate_action,
             llm::heal_step,
             llm::generate_test_script,

@@ -83,6 +83,71 @@ async function getWsUrl(port) {
   }
 }
 
+function buildStagehandModelConfigFromEnv() {
+  let provider = process.env.LLM_PROVIDER || 'openai_compat';
+  if (provider === 'openai') provider = 'openai_compat';
+  const model = process.env.LLM_MODEL;
+  const apiKey = process.env.LLM_API_KEY;
+  let baseURL = process.env.LLM_BASE_URL;
+  if (!model || !apiKey) return undefined;
+
+  let modelName;
+  if (provider === 'gemini') modelName = `google/${model}`;
+  else if (provider === 'ollama') modelName = `ollama/${model}`;
+  else if (provider === 'anthropic') modelName = `anthropic/${model}`;
+  else modelName = `openai/${model}`;
+
+  if ((provider === 'openai_compat' || provider === 'ollama') && baseURL) {
+    baseURL = baseURL.replace(/\/+$/, '');
+    if (!baseURL.endsWith('/v1')) baseURL += '/v1';
+  }
+  return { modelName, apiKey, baseURL };
+}
+
+function createLoginAiResolver(cdpPort) {
+  let stagehandPromise;
+  const instructions = {
+    username: '只观察当前登录页面，返回最可能的用户名、账号、邮箱或手机号输入框。不要读取或填写输入值。',
+    password: '只观察当前登录页面，返回密码输入框。不要读取或填写输入值。',
+    submit: '只观察当前登录页面，返回用于提交登录表单的按钮。不要点击按钮。',
+  };
+
+  const getStagehand = async () => {
+    const model = buildStagehandModelConfigFromEnv();
+    if (!model) return undefined;
+    if (!stagehandPromise) {
+      stagehandPromise = (async () => {
+        const { Stagehand } = await import('@browserbasehq/stagehand');
+        const stagehand = new Stagehand({
+          env: 'LOCAL',
+          localBrowserLaunchOptions: { cdpUrl: await getWsUrl(cdpPort) },
+          model,
+        });
+        await stagehand.init();
+        return stagehand;
+      })();
+    }
+    return stagehandPromise;
+  };
+
+  return {
+    resolve: async kind => {
+      const stagehand = await getStagehand();
+      if (!stagehand) return undefined;
+      const observations = await stagehand.observe(instructions[kind]);
+      const match = Array.isArray(observations)
+        ? observations.find(item => item && typeof item.selector === 'string')
+        : undefined;
+      return match?.selector;
+    },
+    close: async () => {
+      if (!stagehandPromise) return;
+      const stagehand = await stagehandPromise.catch(() => undefined);
+      await stagehand?.close().catch(() => {});
+    },
+  };
+}
+
 // 🤖 注入 AI 智能操作虚拟光标
 async function setupVirtualCursor(context, page) {
   const injectScript = () => {
@@ -344,11 +409,14 @@ async function main() {
       }
 
       case 'login_with_credentials': {
+        const aiLocator = createLoginAiResolver(cdpPort);
         try {
           const payload = parseBrowserLoginPayload(process.env.LG_BROWSER_LOGIN_PAYLOAD);
-          const result = await loginWithCredentials(page, payload);
+          const result = await loginWithCredentials(page, payload, { aiResolver: aiLocator.resolve });
+          await aiLocator.close();
           ok({ action: 'login_with_credentials', ...result });
         } catch {
+          await aiLocator.close();
           fail('CREDENTIAL_LOGIN_FAILED');
         }
         break;
@@ -538,32 +606,11 @@ async function main() {
           }
 
           // 提取文档大纲 (所有标题) 以便 AI 理解页面所属菜单的父子层级结构
-          const docOutline = [];
-          for (let idx = 0; idx < lines.length; idx++) {
-            for (const p of headingPatterns) {
-              if (lines[idx].match(p.regex)) {
-                const textTrim = lines[idx].trim();
-                if (textTrim) {
-                  docOutline.push(textTrim);
-                }
-                break;
-              }
-            }
-          }
-
           if (candidates.length > 0) {
             // 选择内容最丰富的那个候选区域（这能有效避开目录/导航条中仅有一行的干扰匹配，精准定位到真正的正文内容）
             candidates.sort((a, b) => b.content.length - a.content.length);
-            const bodyContent = candidates[0].content;
-            
-            // 拼装大纲目录前缀
-            let outlineHeader = '';
-            if (docOutline.length > 0) {
-              // 限制前80条大纲，避免超长
-              outlineHeader = `[需求文档全局导航目录大纲（请对照它识别当前章节所处的父级菜单/功能分类）]:\n${docOutline.slice(0, 80).map(l => ' - ' + l).join('\n')}\n\n========================================\n\n[当前测试目标章节正文]:\n`;
-            }
-            
-            filteredText = outlineHeader + bodyContent;
+            // 目录仅用于定位候选章节，不能作为需求正文发送给 AI。
+            filteredText = candidates[0].content;
             filteredChars = filteredText.length;
           } else {
             filteredText = `⚠️ 未能在当前页面中找到包含 "${keyword}" 的有效章节。\n\n建议：\n1. 请检查所填章节的文字是否与页面显示完全吻合。\n2. 您可以尝试只输入最简短的核心词（例如：仅输入 "评分权重"），系统会模糊搜索整页并向上自动为您定位章节范围。`;

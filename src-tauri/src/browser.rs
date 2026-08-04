@@ -85,9 +85,9 @@ struct SafeLoginResult {
 struct BrowserLoginPayload {
     login_url: String,
     page_selector: Option<String>,
-    username_selector: String,
-    password_selector: String,
-    submit_selector: String,
+    username_selector: Option<String>,
+    password_selector: Option<String>,
+    submit_selector: Option<String>,
     success_selector: Option<String>,
     username: String,
     password: String,
@@ -193,8 +193,11 @@ fn run_sidecar(args: Vec<String>, envs: Vec<(String, String)>) -> Result<String,
     Ok(stdout.trim().to_string())
 }
 
-fn run_sidecar_with_config(args: Vec<String>, config: Option<LlmConfig>) -> Result<String, String> {
-    let mut envs = Vec::new();
+fn run_sidecar_with_config_and_envs(
+    args: Vec<String>,
+    config: Option<LlmConfig>,
+    mut envs: Vec<(String, String)>,
+) -> Result<String, String> {
     if let Some(cfg) = config {
         let resolved_key = cfg.api_key.clone().or_else(|| crate::auth::current_api_key().ok());
         if let Some(ref key) = resolved_key {
@@ -215,6 +218,10 @@ fn run_sidecar_with_config(args: Vec<String>, config: Option<LlmConfig>) -> Resu
     run_sidecar(args, envs)
 }
 
+fn run_sidecar_with_config(args: Vec<String>, config: Option<LlmConfig>) -> Result<String, String> {
+    run_sidecar_with_config_and_envs(args, config, Vec::new())
+}
+
 fn validate_failure_evidence_id(value: &str) -> Result<(), String> {
     if value.is_empty()
         || value.len() > 128
@@ -228,14 +235,11 @@ fn validate_failure_evidence_id(value: &str) -> Result<(), String> {
     }
 }
 
-fn required_login_selector(value: Option<String>) -> Result<String, String> {
-    value.ok_or_else(|| "AUTOMATIC_LOGIN_CONFIG_INCOMPLETE".to_string())
-}
-
 fn login_test_account(
     app: &tauri::AppHandle,
     account_id: &str,
     port: Option<u16>,
+    config: Option<LlmConfig>,
 ) -> Result<TestAccountLoginOutcome, String> {
     let login = match crate::testing::load_automatic_login(app, account_id) {
         Ok(login) => login,
@@ -247,20 +251,21 @@ fn login_test_account(
     let payload = BrowserLoginPayload {
         login_url: login.login_config.login_url,
         page_selector: login.login_config.page_selector,
-        username_selector: required_login_selector(login.login_config.username_selector)?,
-        password_selector: required_login_selector(login.login_config.password_selector)?,
-        submit_selector: required_login_selector(login.login_config.submit_selector)?,
+        username_selector: login.login_config.username_selector,
+        password_selector: login.login_config.password_selector,
+        submit_selector: login.login_config.submit_selector,
         success_selector: login.login_config.success_selector,
         username: login.credential.username,
         password: login.credential.password,
     };
     let serialized_payload = serde_json::to_string(&payload)
         .map_err(|_| "TEST_ACCOUNT_LOGIN_UNAVAILABLE".to_string())?;
-    let raw = run_sidecar(
+    let raw = run_sidecar_with_config_and_envs(
         vec![
             "login_with_credentials".to_string(),
             format!("--port={}", port.unwrap_or(9222)),
         ],
+        config,
         vec![("LG_BROWSER_LOGIN_PAYLOAD".to_string(), serialized_payload)],
     )
     .map_err(|_| "TEST_ACCOUNT_LOGIN_FAILED".to_string())?;
@@ -314,8 +319,9 @@ pub fn browser_login_test_account(
     app: tauri::AppHandle,
     account_id: String,
     port: Option<u16>,
+    config: Option<LlmConfig>,
 ) -> Result<TestAccountLoginResult, String> {
-    match login_test_account(&app, &account_id, port)? {
+    match login_test_account(&app, &account_id, port, config)? {
         TestAccountLoginOutcome::Completed { final_url } => Ok(TestAccountLoginResult {
             status: "completed".to_string(),
             final_url: Some(final_url),

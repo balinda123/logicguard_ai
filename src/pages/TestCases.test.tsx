@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { RegressionSuite, ScenarioTemplate, TestCase } from '../types'
+import type { TestAccount } from '../types/workflow'
 import { generateTestCasesFromRequirement, generateTestCasesFromTemplate } from '../api/testCaseGenerator'
 import {
   createDefaultSuite,
@@ -13,7 +14,7 @@ import {
   upsertTestCase,
 } from '../api/testCaseStore'
 import { loadCustomTemplates } from '../api/templateGenerator'
-import { listWorkflowScenarios, saveWorkflowScenario } from '../api/testingBridge'
+import { listTestAccounts, listWorkflowScenarios, saveWorkflowScenario } from '../api/testingBridge'
 import { TestCases } from './TestCases'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
@@ -31,8 +32,12 @@ vi.mock('../api/testCaseStore', () => ({
 }))
 vi.mock('../api/templateGenerator', () => ({ loadCustomTemplates: vi.fn() }))
 vi.mock('../api/testingBridge', () => ({
+  listTestAccounts: vi.fn(),
   listWorkflowScenarios: vi.fn(),
   saveWorkflowScenario: vi.fn(),
+}))
+vi.mock('../components/TestAccountsPanel', () => ({
+  TestAccountsPanel: () => <div aria-label="test-accounts-panel" />,
 }))
 vi.mock('../agents/scriptGenerator', () => ({ generateTestScript: vi.fn() }))
 vi.mock('../agents/scriptExecutor', () => ({ executeTestScript: vi.fn() }))
@@ -89,6 +94,33 @@ const suite: RegressionSuite = {
   createdAt: '2026-01-01T00:00:00.000Z',
 }
 
+const workflowAccounts: TestAccount[] = [
+  {
+    id: 'employee-a',
+    role: 'employee',
+    displayName: '员工 A',
+    maskedLoginName: 'emp***',
+    credentialRef: 'credential-employee-a',
+    loginMode: 'automatic',
+    loginConfig: { loginUrl: 'https://example.test/login' },
+    enabled: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'manager-a',
+    role: 'manager',
+    displayName: '上级 A',
+    maskedLoginName: 'mgr***',
+    credentialRef: 'credential-manager-a',
+    loginMode: 'automatic',
+    loginConfig: { loginUrl: 'https://example.test/login' },
+    enabled: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  },
+]
+
 const directGenerateMock = vi.mocked(generateTestCasesFromRequirement)
 const templateGenerateMock = vi.mocked(generateTestCasesFromTemplate)
 const loadCasesMock = vi.mocked(loadTestCases)
@@ -96,6 +128,7 @@ const loadSuitesMock = vi.mocked(loadSuites)
 const loadTemplatesMock = vi.mocked(loadCustomTemplates)
 const upsertCaseMock = vi.mocked(upsertTestCase)
 const listWorkflowScenariosMock = vi.mocked(listWorkflowScenarios)
+const listTestAccountsMock = vi.mocked(listTestAccounts)
 
 function rail(step: number, title: string) {
   return screen.getByRole('button', { name: new RegExp(`^${step}.*${title}`) })
@@ -125,6 +158,7 @@ async function generateDirect() {
 
 describe('TestCases wizard', () => {
   afterEach(cleanup)
+  afterEach(() => vi.restoreAllMocks())
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -138,6 +172,7 @@ describe('TestCases wizard', () => {
     vi.mocked(upsertSuite).mockImplementation(value => [value])
     upsertCaseMock.mockImplementation(value => [value])
     listWorkflowScenariosMock.mockResolvedValue([])
+    listTestAccountsMock.mockResolvedValue(workflowAccounts)
     vi.mocked(saveWorkflowScenario).mockImplementation(async scenario => scenario)
   })
 
@@ -203,6 +238,36 @@ describe('TestCases wizard', () => {
 
     expect(directGenerateMock).toHaveBeenCalledWith('Acceptance criteria', '人事核心流程')
     expect(screen.getByRole('heading', { name: '检查确认' })).toBeVisible()
+  })
+
+  it('passes the selected role accounts to AI when generating a workflow case', async () => {
+    render(<TestCases canManageAccounts />)
+    const user = await enterRequirement()
+    const generationRail = screen.getAllByRole('button').find(button => button.getAttribute('aria-label')?.startsWith('2 '))
+    if (!generationRail) throw new Error('generation rail is missing')
+    await user.click(generationRail)
+    expect(screen.getByLabelText('test-accounts-panel')).toBeVisible()
+
+    const accountSelectors = await screen.findAllByRole('combobox')
+    const employeeSelector = accountSelectors.find(select => Array.from((select as HTMLSelectElement).options).some(option => option.value === 'employee-a'))
+    const managerSelector = accountSelectors.find(select => Array.from((select as HTMLSelectElement).options).some(option => option.value === 'manager-a'))
+    if (!employeeSelector || !managerSelector) throw new Error('workflow account selectors are missing')
+    await user.selectOptions(employeeSelector, 'employee-a')
+    await user.selectOptions(managerSelector, 'manager-a')
+    const directGenerateButton = screen.getAllByRole('button').find(button =>
+      button.className.includes('h-9 w-full') && button.className.includes('bg-brand-500'),
+    )
+    if (!directGenerateButton) throw new Error('direct generation button is missing')
+    await user.click(directGenerateButton)
+
+    await waitFor(() => expect(directGenerateMock).toHaveBeenCalledWith(
+      'Acceptance criteria',
+      expect.any(String),
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'employee-a', role: 'employee' }),
+        expect.objectContaining({ id: 'manager-a', role: 'manager' }),
+      ]),
+    ))
   })
 
   it('generates from a saved template without pasted requirement and advances to step 3', async () => {
@@ -295,6 +360,19 @@ describe('TestCases wizard', () => {
     expect(rail(3, '检查确认')).toBeDisabled()
   })
 
+  it('keeps the user on generation instead of displaying fallback cases when AI generation fails', async () => {
+    directGenerateMock.mockRejectedValue(new Error('AI generation failed: gateway unavailable'))
+    render(<TestCases />)
+    const user = await enterRequirement()
+    await user.click(rail(2, '生成用例'))
+
+    await user.click(screen.getByRole('button', { name: '直接从需求生成' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('AI generation failed: gateway unavailable')
+    expect(screen.getByRole('heading', { name: '生成用例' })).toBeVisible()
+    expect(rail(3, '检查确认')).toBeDisabled()
+  })
+
   it('only offers workflow conversion after the legacy case is confirmed', async () => {
     loadCasesMock.mockReturnValue([draftCase])
     render(<TestCases />)
@@ -322,5 +400,74 @@ describe('TestCases wizard', () => {
 
     expect(screen.getByText('Draft case')).toBeVisible()
     expect(rail(4, '回归执行')).toBeEnabled()
+  })
+
+  it('deletes a reviewed flow from cases and every linked regression suite', async () => {
+    const removedCase = { ...draftCase, status: 'confirmed' as const }
+    const remainingCase = {
+      ...draftCase,
+      id: 'case-2',
+      title: 'Remaining case',
+      status: 'confirmed' as const,
+    }
+    const linkedSuite = { ...suite, caseIds: [removedCase.id, remainingCase.id] }
+    loadCasesMock.mockReturnValue([removedCase, remainingCase])
+    loadSuitesMock.mockReturnValue([linkedSuite])
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<TestCases />)
+    const user = userEvent.setup()
+
+    await user.click(rail(3, '检查确认'))
+    await user.click(screen.getByRole('button', { name: '删除流程 Draft case' }))
+
+    expect(confirmSpy).toHaveBeenCalledWith('确认删除流程“Draft case”？删除后会同步从回归套件移除。')
+    expect(saveTestCases).toHaveBeenCalledWith([remainingCase])
+    expect(upsertSuite).toHaveBeenCalledWith({ ...linkedSuite, caseIds: [remainingCase.id] })
+    expect(screen.queryByText('Draft case')).not.toBeInTheDocument()
+
+    expect(rail(4, '回归执行')).toBeEnabled()
+    await user.click(rail(4, '回归执行'))
+    expect(screen.queryByText('Draft case')).not.toBeInTheDocument()
+    expect(screen.getByText('Remaining case')).toBeVisible()
+  })
+
+  it('keeps a reviewed flow when deletion is cancelled', async () => {
+    loadCasesMock.mockReturnValue([{ ...draftCase, status: 'confirmed' }])
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<TestCases />)
+    const user = userEvent.setup()
+
+    await user.click(rail(3, '检查确认'))
+    await user.click(screen.getByRole('button', { name: '删除流程 Draft case' }))
+
+    expect(screen.getByText('Draft case')).toBeVisible()
+    expect(saveTestCases).not.toHaveBeenCalled()
+    expect(upsertSuite).not.toHaveBeenCalled()
+  })
+
+  it('locks regression execution after deleting the last confirmed flow', async () => {
+    loadCasesMock.mockReturnValue([{ ...draftCase, status: 'confirmed' }])
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<TestCases />)
+    const user = userEvent.setup()
+
+    await user.click(rail(3, '检查确认'))
+    expect(rail(4, '回归执行')).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: '删除流程 Draft case' }))
+
+    expect(rail(4, '回归执行')).toBeDisabled()
+  })
+
+  it('keeps the execution log visible beside a scrollable regression case list', async () => {
+    loadCasesMock.mockReturnValue([{ ...draftCase, status: 'confirmed' }])
+    render(<TestCases />)
+    const user = userEvent.setup()
+
+    await user.click(rail(3, '检查确认'))
+    await user.click(rail(4, '回归执行'))
+
+    expect(screen.getByLabelText('测试设计工作区')).toHaveClass('overflow-y-auto')
+    expect(screen.getByLabelText('回归用例列表')).toBeVisible()
+    expect(screen.getByLabelText('最近执行日志')).toHaveTextContent('尚未执行用例')
   })
 })

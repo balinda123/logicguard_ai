@@ -11,16 +11,18 @@ export interface LlmConfig {
   api_key?: string;
   base_url?: string;
   model: string;
+  reasoning_effort?: '' | 'low' | 'medium' | 'high' | 'xhigh';
+  available_models?: string[];
   credential_configured?: boolean;
 }
 
-// Default to Gemini for company use
-const DEFAULT_CONFIG: LlmConfig = {
-  provider: 'gemini',
-  model: 'gemini-2.0-flash',
+export const DEFAULT_LLM_CONFIG: LlmConfig = {
+  provider: 'openai_compat',
+  model: '',
+  base_url: 'http://10.255.240.106:9019',
 };
 
-let _config: LlmConfig = { ...DEFAULT_CONFIG };
+let _config: LlmConfig = { ...DEFAULT_LLM_CONFIG };
 
 function configStorageKey(): string {
   return `logicguard_llm_config_${sessionStorage.getItem('logicguard_user_id') ?? 'anonymous'}`;
@@ -71,6 +73,15 @@ function localizeLlmMessage(message: string): string {
   if (lower.includes('unknown llm provider')) {
     return '未知的模型提供商，请重新选择模型预设';
   }
+  if (
+    lower.includes('model') &&
+    (lower.includes('not found') || lower.includes('does not exist') || lower.includes('not supported'))
+  ) {
+    return '当前网关不支持该模型名称。请从模型下拉中更换，或向管理员确认可用的模型 ID。';
+  }
+  if (lower.includes('404') || lower.includes('not found')) {
+    return '接口地址不存在。请向管理员确认 Base URL 是否需要追加 /v1。';
+  }
   return normalized;
 }
 
@@ -83,6 +94,12 @@ export async function testLlmConnection(config?: LlmConfig): Promise<{ ok: boole
   } catch (e) {
     return { ok: false, message: localizeLlmMessage(String(e)) };
   }
+}
+
+export async function listOpenAiCompatModels(config?: LlmConfig): Promise<string[]> {
+  const cfg = config ?? getLlmConfig();
+  if (cfg.provider !== 'openai_compat') return [];
+  return invoke<string[]>('list_openai_compat_models', { config: cfg });
 }
 
 // =============================================

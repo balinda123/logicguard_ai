@@ -11,8 +11,10 @@ import {
   RefreshCw,
   ShieldCheck,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 import type { HealerLog, RegressionSuite, ScenarioTemplate, TestCase, TestResult, TestStep } from '../types';
+import type { BusinessRole, TestAccount } from '../types/workflow';
 import { generateTestCasesFromRequirement, generateTestCasesFromTemplate } from '../api/testCaseGenerator';
 import {
   createDefaultSuite,
@@ -30,7 +32,8 @@ import { maskSensitiveText, securityModeLabel, getDataSecurityConfig } from '../
 import { RequirementModeler } from './RequirementModeler';
 import { clampTestDesignStep, highestUnlockedTestDesignStep, type TestDesignStep } from './testDesignWizard';
 import { ScenarioConversionDialog } from '../components/ScenarioConversionDialog';
-import { listWorkflowScenarios } from '../api/testingBridge';
+import { TestAccountsPanel } from '../components/TestAccountsPanel';
+import { listTestAccounts, listWorkflowScenarios } from '../api/testingBridge';
 
 const TYPE_LABEL: Record<TestCase['type'], string> = {
   normal: '正常流程',
@@ -58,12 +61,12 @@ function buildCaseIntent(testCase: TestCase, template?: ScenarioTemplate | null)
   const templateSteps = template
     ? template.steps
         .sort((a, b) => a.order - b.order)
-        .map((step) => `${step.order}. [${step.action}] ${step.description}${step.selectorHint ? `；元素提示：${step.selectorHint}` : ''}`)
+        .map((step) => `${step.order}. [${step.role ?? 'employee'}] [${step.action}] ${step.description}${step.selectorHint ? `；元素提示：${step.selectorHint}` : ''}`)
         .join('\n')
     : '';
   const steps = testCase.steps
     .sort((a, b) => a.order - b.order)
-    .map((step) => `${step.order}. ${step.action}；预期：${step.expectedResult}`)
+    .map((step) => `${step.order}. [${step.role ?? 'employee'}] ${step.action}；预期：${step.expectedResult}`)
     .join('\n');
 
   return maskSensitiveText(`执行测试用例：${testCase.title}
@@ -159,7 +162,18 @@ ${logs.map((line) => `- ${line}`).join('\n') || '- 无日志'}`),
   };
 }
 
-export const TestCases: React.FC = () => {
+interface TestCasesProps {
+  canManageAccounts?: boolean;
+}
+
+const FLOW_ROLES: BusinessRole[] = ['employee', 'manager', 'hrbp'];
+const FLOW_ROLE_LABELS: Record<BusinessRole, string> = {
+  employee: '\u5458\u5de5',
+  manager: '\u4e0a\u7ea7',
+  hrbp: 'HRBP',
+};
+
+export const TestCases: React.FC<TestCasesProps> = ({ canManageAccounts = false }) => {
   const [requirement, setRequirement] = useState('');
   const [moduleName, setModuleName] = useState('人事核心流程');
   const [cases, setCases] = useState<TestCase[]>([]);
@@ -178,7 +192,24 @@ export const TestCases: React.FC = () => {
   const [generationNotice, setGenerationNotice] = useState<string | null>(null);
   const [convertedCaseIds, setConvertedCaseIds] = useState<Set<string>>(() => new Set());
   const [conversionCase, setConversionCase] = useState<TestCase | null>(null);
+  const [testAccounts, setTestAccounts] = useState<TestAccount[]>([]);
+  const [selectedFlowAccountIds, setSelectedFlowAccountIds] = useState<Partial<Record<BusinessRole, string>>>({});
   const requirementRevisionRef = useRef(0);
+
+  const refreshTestAccounts = async () => {
+    try {
+      const accounts = (await listTestAccounts()).filter((account) => account.enabled);
+      setTestAccounts(accounts);
+      setSelectedFlowAccountIds((current) => {
+        const validIds = new Set(accounts.map((account) => account.id));
+        return Object.fromEntries(
+          Object.entries(current).filter(([, accountId]) => validIds.has(accountId)),
+        ) as Partial<Record<BusinessRole, string>>;
+      });
+    } catch {
+      setTestAccounts([]);
+    }
+  };
 
   useEffect(() => {
     const loadedCases = loadTestCases();
@@ -198,6 +229,7 @@ export const TestCases: React.FC = () => {
     void listWorkflowScenarios()
       .then((scenarios) => setConvertedCaseIds(new Set(scenarios.map((scenario) => scenario.sourceTestCaseId).filter(Boolean))))
       .catch(() => setConvertedCaseIds(new Set()));
+    void refreshTestAccounts();
   }, []);
 
   const selectedSuite = useMemo(
@@ -207,6 +239,12 @@ export const TestCases: React.FC = () => {
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === selectedTemplateId) ?? null,
     [selectedTemplateId, templates],
+  );
+  const selectedFlowAccounts = useMemo(
+    () => FLOW_ROLES
+      .map((role) => testAccounts.find((account) => account.role === role && account.id === selectedFlowAccountIds[role]))
+      .filter((account): account is TestAccount => Boolean(account)),
+    [selectedFlowAccountIds, testAccounts],
   );
 
   const confirmedCases = cases.filter((item) => item.status === 'confirmed');
@@ -290,7 +328,9 @@ export const TestCases: React.FC = () => {
     setGenerating(true);
     setGenerationNotice(null);
     try {
-      const generated = await generateTestCasesFromRequirement(requirement, moduleName);
+      const generated = selectedFlowAccounts.length
+        ? await generateTestCasesFromRequirement(requirement, moduleName, selectedFlowAccounts)
+        : await generateTestCasesFromRequirement(requirement, moduleName);
       if (sourceRevision !== requirementRevisionRef.current) return;
       if (generated.length === 0) {
         setGenerationNotice('未生成任何测试用例，请检查需求后重试');
@@ -303,6 +343,10 @@ export const TestCases: React.FC = () => {
       setStep(3);
       if (uniqueGenerated.length < generated.length) {
         window.alert(`已跳过 ${generated.length - uniqueGenerated.length} 条重复用例`);
+      }
+    } catch (error) {
+      if (sourceRevision === requirementRevisionRef.current) {
+        setGenerationNotice(error instanceof Error ? error.message : 'AI 生成失败，请检查模型连接后重试');
       }
     } finally {
       setGenerating(false);
@@ -319,7 +363,9 @@ export const TestCases: React.FC = () => {
     setGenerating(true);
     setGenerationNotice(null);
     try {
-      const generated = await generateTestCasesFromTemplate(selectedTemplate);
+      const generated = selectedFlowAccounts.length
+        ? await generateTestCasesFromTemplate(selectedTemplate, selectedFlowAccounts)
+        : await generateTestCasesFromTemplate(selectedTemplate);
       if (
         sourceRevision !== requirementRevisionRef.current
         || sourceTemplateId !== selectedTemplateId
@@ -336,6 +382,13 @@ export const TestCases: React.FC = () => {
       if (uniqueGenerated.length < generated.length) {
         window.alert(`已跳过 ${generated.length - uniqueGenerated.length} 条重复用例`);
       }
+    } catch (error) {
+      if (
+        sourceRevision === requirementRevisionRef.current
+        && sourceTemplateId === selectedTemplateId
+      ) {
+        setGenerationNotice(error instanceof Error ? error.message : 'AI 生成失败，请检查模型连接后重试');
+      }
     } finally {
       setGenerating(false);
     }
@@ -348,6 +401,32 @@ export const TestCases: React.FC = () => {
       confirmedAt: new Date().toISOString(),
     };
     setCases(upsertTestCase(updated));
+  };
+
+  const handleDeleteCase = (testCase: TestCase) => {
+    if (!window.confirm(`确认删除流程“${testCase.title}”？删除后会同步从回归套件移除。`)) {
+      return;
+    }
+
+    const nextCases = cases.filter((item) => item.id !== testCase.id);
+    const nextSuites = suites.map((suite) => {
+      if (!suite.caseIds.includes(testCase.id)) return suite;
+      const nextSuite = {
+        ...suite,
+        caseIds: suite.caseIds.filter((caseId) => caseId !== testCase.id),
+      };
+      upsertSuite(nextSuite);
+      return nextSuite;
+    });
+
+    refreshCases(nextCases);
+    setSuites(nextSuites);
+    setConvertedCaseIds((current) => {
+      const next = new Set(current);
+      next.delete(testCase.id);
+      return next;
+    });
+    if (conversionCase?.id === testCase.id) setConversionCase(null);
   };
 
   const handleScenarioSaved = (scenarioId: string) => {
@@ -483,10 +562,10 @@ export const TestCases: React.FC = () => {
       </div>
       <ol className="space-y-1 text-[11px] text-text-secondary">
         {testCase.steps.map((caseStep) => (
-          <li key={caseStep.order}>{caseStep.order}. {caseStep.action} → {caseStep.expectedResult}</li>
+          <li key={caseStep.order}>{caseStep.order}. {caseStep.role ? `${FLOW_ROLE_LABELS[caseStep.role]}：` : ''}{caseStep.action} → {caseStep.expectedResult}</li>
         ))}
       </ol>
-      <div className="flex flex-wrap gap-2 pt-1">
+      <div className="flex flex-wrap items-center gap-2 pt-1">
         {!executionActions && testCase.status === 'draft' && (
           <button onClick={() => handleConfirm(testCase)} className="h-8 rounded-lg bg-brand-500 px-3 text-xs font-semibold text-white hover:bg-brand-600">
             人工确认
@@ -516,6 +595,17 @@ export const TestCases: React.FC = () => {
             </button>
           </>
         )}
+        {!executionActions && (
+          <button
+            type="button"
+            onClick={() => handleDeleteCase(testCase)}
+            className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-lg border border-error/25 text-error transition-colors hover:bg-error/10"
+            aria-label={`删除流程 ${testCase.title}`}
+            title="删除流程"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        )}
       </div>
     </article>
   );
@@ -532,7 +622,7 @@ export const TestCases: React.FC = () => {
   ];
 
   return (
-    <div className="h-full flex-1 space-y-5 overflow-y-auto p-6 animate-fade-in">
+    <div className="h-full min-h-0 flex-1 space-y-5 overflow-y-auto p-6 animate-fade-in">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-lg font-bold text-text-primary">测试设计</h2>
@@ -544,8 +634,8 @@ export const TestCases: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <nav aria-label="测试设计步骤" className="rounded-2xl border border-border bg-surface-1/80 p-3 glow">
+      <div className="grid min-h-0 grid-cols-1 gap-5 lg:grid-cols-[240px_minmax(0,1fr)]">
+        <nav aria-label="测试设计步骤" className="rounded-2xl border border-border bg-surface-1/80 p-3 glow lg:sticky lg:top-0 lg:self-start">
           <ol className="space-y-2">
             {wizardSteps.map((item) => {
               const locked = item.id > highestUnlockedStep;
@@ -570,7 +660,10 @@ export const TestCases: React.FC = () => {
           </ol>
         </nav>
 
-        <section className="min-w-0 space-y-4 rounded-2xl border border-border bg-surface-1/80 p-5 glow">
+        <section
+          aria-label="测试设计工作区"
+          className="min-h-0 min-w-0 space-y-4 overflow-y-auto rounded-2xl border border-border bg-surface-1/80 p-5 glow lg:max-h-[calc(100vh-12rem)]"
+        >
           {step === 1 && (
             <div className="space-y-4">
               <div className="flex items-center justify-between gap-3 border-b border-border pb-3">
@@ -588,6 +681,20 @@ export const TestCases: React.FC = () => {
           {step === 2 && (
             <div className="space-y-4">
               <div className="flex items-center gap-2 border-b border-border pb-3"><FileText className="h-4 w-4 text-brand-400" /><h3 className="text-sm font-bold text-text-primary">生成用例</h3></div>
+              <TestAccountsPanel canManage={canManageAccounts} onAccountsChanged={() => { void refreshTestAccounts(); }} />
+              <div className="space-y-3 rounded-xl border border-brand-500/25 bg-brand-500/5 p-4">
+                <div>
+                  <h4 className="text-sm font-bold text-text-primary">{'\u672c\u6b21\u6d41\u7a0b\u4f7f\u7528\u7684\u6d4b\u8bd5\u8d26\u53f7'}</h4>
+                  <p className="mt-1 text-[11px] text-text-muted">{'\u9009\u62e9\u540e\uff0cAI \u4f1a\u5728\u7528\u4f8b\u4e2d\u5199\u660e\u6bcf\u4e00\u6b65\u7684\u6267\u884c\u89d2\u8272\u3001\u767b\u5f55\u8d26\u53f7\u4e0e\u5207\u6362\u987a\u5e8f\uff1b\u4e0d\u4f1a\u5c06\u5bc6\u7801\u53d1\u7ed9\u6a21\u578b\u3002'}</p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  {FLOW_ROLES.map((role) => {
+                    const accountsForRole = testAccounts.filter((account) => account.role === role);
+                    return <label key={role} className="block"><span className="mb-1 block text-[11px] text-text-secondary">{FLOW_ROLE_LABELS[role]}{'\u6d4b\u8bd5\u8d26\u53f7'}</span><select aria-label={`workflow-account-${role}`} disabled={generating || accountsForRole.length === 0} value={selectedFlowAccountIds[role] ?? ''} onChange={(event) => { setSelectedFlowAccountIds((current) => ({ ...current, [role]: event.target.value })); markRequirementChanged(); }} className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none disabled:opacity-40"><option value="">{'\u4e0d\u53c2\u4e0e\u672c\u6b21\u6d41\u7a0b'}</option>{accountsForRole.map((account) => <option key={account.id} value={account.id}>{account.displayName}</option>)}</select></label>;
+                  })}
+                </div>
+                {testAccounts.length === 0 && <p className="text-[11px] text-warning">{'\u6682\u65e0\u53ef\u7528\u8d26\u53f7\u3002\u53ef\u5728\u6b64\u9875\u65b0\u589e\u6d4b\u8bd5\u8d26\u53f7\uff0c\u6216\u7ee7\u7eed\u751f\u6210\u5355\u89d2\u8272\u7528\u4f8b\u3002'}</p>}
+              </div>
               <div className="grid gap-4 xl:grid-cols-2">
                 <div className="space-y-3 rounded-xl border border-border bg-surface-2/60 p-4"><h4 className="text-sm font-bold text-text-primary">直接从需求生成</h4><p className="text-xs text-text-muted">根据需求与模块生成覆盖正常、边界和异常场景的用例。</p><button type="button" onClick={handleGenerate} disabled={generating || !requirement.trim()} className="flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 text-xs font-semibold text-white hover:bg-brand-600 disabled:opacity-40">{generating ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}直接从需求生成</button></div>
                 <div className="space-y-3 rounded-xl border border-border bg-surface-2/60 p-4"><h4 className="text-sm font-bold text-text-primary">基于场景模板生成</h4><label className="block"><span className="mb-2 block text-[11px] text-text-muted">场景模板</span><select aria-label="场景模板" disabled={generating} value={selectedTemplateId} onChange={(event) => { setSelectedTemplateId(event.target.value); markRequirementChanged(); }} className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none disabled:opacity-40"><option value="">请选择模板</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>{selectedTemplate && <div className="space-y-1 rounded-lg border border-border bg-surface-1/60 p-3 text-[11px] text-text-muted"><div className="font-semibold text-text-primary">{selectedTemplate.name}</div><div>{selectedTemplate.description}</div><div>步骤：{selectedTemplate.steps.length} · 变量：{selectedTemplate.variables.length} · 参数集：{selectedTemplate.parameterSets?.length ?? 0}</div></div>}<button type="button" onClick={handleGenerateFromTemplate} disabled={generating || !selectedTemplate} className="flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-brand-500/20 bg-brand-500/10 text-xs font-semibold text-brand-400 hover:bg-brand-500/15 disabled:opacity-40">{generating ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}基于场景模板生成</button></div>
@@ -608,8 +715,17 @@ export const TestCases: React.FC = () => {
             <div className="space-y-5">
               <div className="flex items-center gap-2 border-b border-border pb-3"><Layers3 className="h-4 w-4 text-brand-400" /><h3 className="text-sm font-bold text-text-primary">回归执行</h3></div>
               <div className="space-y-3 rounded-xl border border-border bg-surface-2/60 p-4"><div className="flex items-center justify-between"><h4 className="text-sm font-bold text-text-primary">回归套件</h4><button type="button" onClick={handleCreateSuite} className="text-[11px] text-brand-400 hover:text-brand-300">新建套件</button></div>{suites.length === 0 ? <div className="rounded-xl border border-dashed border-border p-5 text-center text-xs text-text-muted">暂无套件。可以新建回归套件。</div> : <><select aria-label="回归套件" value={selectedSuiteId} onChange={(event) => setSelectedSuiteId(event.target.value)} className="h-9 w-full rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none">{suites.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{selectedSuite && <div className="space-y-2 rounded-xl border border-border bg-surface-1/60 p-3 text-xs"><div className="font-semibold text-text-primary">{selectedSuite.name}</div><div className="text-text-muted">{selectedSuite.description}</div><div className="flex items-center justify-between text-[11px] text-text-secondary"><span>用例数：{selectedSuite.caseIds.length}</span><span>上次通过率：{selectedSuite.lastPassRate ?? '--'}%</span></div><button type="button" onClick={() => runSuite(selectedSuite)} disabled={runningId !== null} className="flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-success/20 bg-success/10 text-xs font-semibold text-success hover:bg-success/15 disabled:opacity-50"><Play className="h-3.5 w-3.5" />一键执行套件</button></div>}</>}</div>
-              <div className="grid gap-4 xl:grid-cols-2">{confirmedCases.map((testCase) => renderCaseDetails(testCase, true))}</div>
-              {runLog.length > 0 && <section className="space-y-1 rounded-2xl border border-border bg-[#070b16] p-4 font-mono text-[11px] text-slate-300"><div className="mb-2 text-xs font-bold text-white">最近执行日志</div>{runLog.slice(-16).map((line, index) => <div key={`${line}-${index}`}>{line}</div>)}</section>}
+              <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <section aria-label="回归用例列表" className="order-2 grid max-h-[32rem] gap-4 overflow-y-auto pr-1 xl:order-1">
+                  {confirmedCases.map((testCase) => renderCaseDetails(testCase, true))}
+                </section>
+                <section aria-label="最近执行日志" className="order-1 min-h-48 max-h-[32rem] space-y-1 overflow-y-auto rounded-xl border border-border bg-[#070b16] p-4 font-mono text-[11px] text-slate-300 xl:order-2 xl:sticky xl:top-0">
+                  <div className="mb-2 text-xs font-bold text-white">最近执行日志</div>
+                  {runLog.length > 0
+                    ? runLog.slice(-50).map((line, index) => <div key={`${line}-${index}`}>{line}</div>)
+                    : <div className="font-sans text-xs text-slate-500">尚未执行用例</div>}
+                </section>
+              </div>
             </div>
           )}
 

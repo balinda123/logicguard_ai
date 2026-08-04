@@ -1,14 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Cpu, Sliders, Shield, RefreshCw, CheckCircle, XCircle, Key, Zap, Globe, Users, UserPlus, LockKeyhole, FolderOpen, Database, FileText } from 'lucide-react';
 import type { SystemStatus } from '../types';
-import { getLlmConfig, setLlmConfig, testLlmConnection } from '../api/llmBridge';
+import { getLlmConfig, listOpenAiCompatModels, setLlmConfig, testLlmConnection } from '../api/llmBridge';
 import type { LlmConfig } from '../api/llmBridge';
 import { invoke } from '@tauri-apps/api/core';
 import { createUser, disableUser, getCredentialStatus, listUsers, resetUserPassword, saveApiKey, type SessionUser } from '../api/auth';
 import { getCdpPort, setCdpPort as saveCdpPort } from '../api/browserBridge';
 import { getDataSecurityConfig, setDataSecurityConfig, securityModeLabel } from '../utils/privacy';
 import type { DataSecurityConfig, DataSecurityMode } from '../types';
-import { TestAccountsPanel } from '../components/TestAccountsPanel';
 
 interface SettingsProps {
   status: SystemStatus;
@@ -27,7 +26,7 @@ interface ProviderPreset {
   apiKeyPlaceholder: string;
 }
 
-const PROVIDER_PRESETS: ProviderPreset[] = [
+export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: 'deepseek',
     label: 'DeepSeek（推荐 / OpenAI 兼容）',
@@ -43,6 +42,14 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     model: 'gpt-4o-mini',
     baseUrl: 'https://api.openai.com/v1',
     apiKeyPlaceholder: 'sk-...',
+  },
+  {
+    id: 'company-chatgpt',
+    label: 'ChatGPT（公司网关）',
+    provider: 'openai_compat',
+    model: '',
+    baseUrl: 'http://10.255.240.106:9019',
+    apiKeyPlaceholder: '填写公司分配的 ChatGPT API Key',
   },
   {
     id: 'qwen',
@@ -101,6 +108,24 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
   },
 ];
 
+export const REASONING_EFFORT_OPTIONS = [
+  { value: '', label: '自动（不发送参数）' },
+  { value: 'low', label: '低' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '高' },
+  { value: 'xhigh', label: '极高' },
+] as const;
+
+export function gatewayModelOptions(models: string[]) {
+  return Array.from(new Set(models.map((model) => model.trim()).filter(Boolean)))
+    .sort((left, right) => left.localeCompare(right))
+    .map((value) => ({ value, label: value }));
+}
+
+export function canDiscoverGatewayModels(config: Pick<LlmConfig, 'provider' | 'base_url'>): boolean {
+  return config.provider === 'openai_compat' && Boolean(config.base_url?.trim());
+}
+
 interface StorageLocations {
   appDataDir: string;
   usersDbPath: string;
@@ -116,6 +141,7 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
   const [showApiKey, setShowApiKey] = useState(false);
   const [llmTestState, setLlmTestState] = useState<TestState>('idle');
   const [llmTestMsg, setLlmTestMsg] = useState('');
+  const [discoveringModels, setDiscoveringModels] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [users, setUsers] = useState<SessionUser[]>([]);
   const [newUsername, setNewUsername] = useState('');
@@ -144,6 +170,7 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
   const apiKeyPlaceholder = llmConfig.credential_configured
     ? '已安全保存；留空表示不修改'
     : selectedPreset.apiKeyPlaceholder;
+  const modelOptions = gatewayModelOptions(llmConfig.available_models ?? []);
 
   // Chrome CDP 一键启动状态
   const [chromeLaunchState, setChromeLaunchState] = useState<TestState>('idle');
@@ -194,7 +221,13 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
     if (currentUser.role === 'admin') listUsers().then(setUsers).catch(() => setUsers([]));
   }, [currentUser.role]);
 
-  const handleSaveLlmConfig = async () => {
+  const handleSaveLlmConfig = async (requireModel = true) => {
+    if (requireModel && !llmConfig.model.trim()) {
+      throw new Error('请先选择或填写模型名称');
+    }
+    if (llmConfig.provider === 'openai_compat' && !llmConfig.base_url?.trim()) {
+      throw new Error('请先填写 OpenAI 兼容接口地址');
+    }
     let credentialConfigured = llmConfig.credential_configured === true;
     if (apiKeyInput.trim()) {
       await saveApiKey(apiKeyInput);
@@ -228,6 +261,25 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
       setStatus(prev => ({ ...prev, llm: 'connected' }));
     } else {
       setStatus(prev => ({ ...prev, llm: 'disconnected' }));
+    }
+  };
+
+  const handleDiscoverModels = async () => {
+    setDiscoveringModels(true);
+    setLlmTestMsg('');
+    try {
+      const cfg = await handleSaveLlmConfig(false);
+      const models = await listOpenAiCompatModels(cfg);
+      const next = { ...cfg, available_models: models };
+      setLlmConfig(next);
+      setLlmConfigState(next);
+      setLlmTestState('ok');
+      setLlmTestMsg(`已从网关读取 ${models.length} 个可用模型，请从模型名称下拉中选择后再测试。`);
+    } catch (reason) {
+      setLlmTestState('error');
+      setLlmTestMsg(String(reason));
+    } finally {
+      setDiscoveringModels(false);
     }
   };
 
@@ -281,6 +333,7 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
                     provider: preset.provider,
                     model: preset.model,
                     base_url: preset.baseUrl,
+                    available_models: [],
                   }));
                 }}
                 className={inputCls}
@@ -290,20 +343,35 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
                 ))}
               </select>
               <p className="text-[9px] text-text-muted mt-1">
-                选择预设会自动填入推荐模型和 Base URL；仍可在右侧手动微调模型名称。
+                选择预设会自动填入接口地址；模型名称仅来自当前网关读取结果。
               </p>
             </div>
 
             {/* Model name */}
             <div className="space-y-1">
               <label className={labelCls}>模型名称</label>
-              <input
-                  type="text"
+              <div className="flex gap-2">
+                <select
                   value={llmConfig.model}
                   onChange={(e) => setLlmConfigState(prev => ({ ...prev, model: e.target.value }))}
-                  placeholder={llmConfig.provider === 'gemini' ? 'gemini-2.0-flash' : 'deepseek-chat'}
+                  disabled={modelOptions.length === 0 || discoveringModels}
                   className={inputCls}
-                />
+                >
+                  <option value="">{modelOptions.length === 0 ? '请先读取可用模型' : '请选择模型'}</option>
+                  {modelOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                {llmConfig.provider === 'openai_compat' && (
+                  <button
+                    type="button"
+                    onClick={handleDiscoverModels}
+                    disabled={discoveringModels || llmTestState === 'testing'}
+                    className="h-9 shrink-0 rounded-lg border border-brand-500/30 bg-brand-500/10 px-3 text-xs font-semibold text-brand-400 hover:bg-brand-500/15 disabled:opacity-40"
+                  >
+                    {discoveringModels ? '读取中...' : '读取可用模型'}
+                  </button>
+                )}
+              </div>
+              <p className="text-[9px] text-text-muted mt-1">模型列表仅显示当前网关读取到的结果，重新读取不会清空已返回的其他模型。</p>
             </div>
 
               <div className="space-y-1 sm:col-span-2">
@@ -342,6 +410,19 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
                   placeholder="https://api.deepseek.com"
                   className={inputCls}
                 />
+              </div>
+            )}
+            {llmConfig.provider === 'openai_compat' && (
+              <div className="space-y-1">
+                <label className={labelCls}>推理强度</label>
+                <select
+                  value={llmConfig.reasoning_effort ?? ''}
+                  onChange={(e) => setLlmConfigState(prev => ({ ...prev, reasoning_effort: e.target.value as LlmConfig['reasoning_effort'] }))}
+                  className={inputCls}
+                >
+                  {REASONING_EFFORT_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <p className="text-[9px] text-text-muted mt-1">仅 gpt-5、o、codex 等推理模型会收到该参数。</p>
               </div>
             )}
           </div>
@@ -571,8 +652,6 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
             卸载或升级前如果要保留账号、报告和浏览器登录态，请不要手动删除上面的应用数据目录；API Key 位于系统凭据库，需要在 Windows Credential Manager 或 macOS Keychain 中单独管理。
           </div>
         </div>
-
-        {currentUser.role === 'admin' && <TestAccountsPanel canManage />}
 
         {currentUser.role === 'admin' && (
           <div className="p-5 rounded-xl border border-border bg-surface-1/70 space-y-4 glow col-span-full">

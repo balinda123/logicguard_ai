@@ -93,6 +93,18 @@ describe('RequirementModeler', () => {
     saveMock.mockReturnValue([generatedTemplate])
   })
 
+  it('uses the shared light workspace style with a horizontal stepper', () => {
+    render(<RequirementModeler onCancel={vi.fn()} onSaved={vi.fn()} />)
+
+    const region = screen.getByRole('region', { name: '需求文档建模' })
+    expect(region).toHaveClass('bg-surface-1', 'text-text-primary')
+    expect(region).not.toHaveClass('bg-slate-950', 'text-slate-100')
+    expect(screen.getByRole('heading', { name: '需求文档建模' })).toBeVisible()
+    expect(screen.getByRole('navigation', { name: '建模步骤' })).toHaveClass(
+      'overflow-x-auto',
+    )
+  })
+
   it('keeps the first next action disabled for an invalid URL and shows an inline error', async () => {
     const user = userEvent.setup()
     render(<RequirementModeler onCancel={vi.fn()} onSaved={vi.fn()} />)
@@ -130,6 +142,25 @@ describe('RequirementModeler', () => {
     expect(screen.getByLabelText('需求文档网址')).toHaveValue(
       ' https://example.com/requirements ',
     )
+  })
+
+  it('reuses captured content after returning from modeling and shows its source', async () => {
+    render(<RequirementModeler onCancel={vi.fn()} onSaved={vi.fn()} />)
+    const user = await reachCapture()
+
+    await user.click(screen.getByRole('button', { name: '打开并抓取网页' }))
+
+    expect(await screen.findByLabelText('需求正文')).toHaveValue('Captured requirement text')
+    expect(screen.getByText('抓取信息')).toBeVisible()
+    expect(screen.getByText('Requirements')).toBeVisible()
+    expect(screen.getByText('关键词：checkout')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: '上一步' }))
+    await user.click(screen.getByRole('button', { name: '继续使用已抓取正文' }))
+
+    expect(await screen.findByLabelText('需求正文')).toHaveValue('Captured requirement text')
+    expect(navigateMock).toHaveBeenCalledTimes(1)
+    expect(contentMock).toHaveBeenCalledTimes(1)
   })
 
   it.each([
@@ -254,6 +285,26 @@ describe('RequirementModeler', () => {
     await user.click(generate)
     expect(await screen.findByDisplayValue('Generated flow')).toBeVisible()
     expect(generateMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('allows editing capture inputs after returning from a modeling failure', async () => {
+    generateMock.mockRejectedValueOnce(new Error('section not found'))
+    render(<RequirementModeler onCancel={vi.fn()} onSaved={vi.fn()} />)
+    const user = await reachCapture()
+    await user.click(screen.getByRole('button', { name: '打开并抓取网页' }))
+    await screen.findByLabelText('需求正文')
+
+    await user.click(screen.getByRole('button', { name: 'AI 解析需求并建模' }))
+    await screen.findByRole('alert')
+    await user.click(screen.getByRole('button', { name: '上一步' }))
+
+    expect(screen.getByLabelText('需求文档网址')).toBeEnabled()
+    const keywordInput = screen.getByLabelText('关键词过滤（可选）')
+    expect(keywordInput).toBeEnabled()
+    await user.clear(keywordInput)
+    await user.type(keywordInput, '评分权重')
+    expect(keywordInput).toHaveValue('评分权重')
+    expect(screen.getByRole('status')).toHaveTextContent('输入已更改，请重新抓取网页')
   })
 
   it('keeps an edited draft visible when saving fails and does not notify the parent', async () => {

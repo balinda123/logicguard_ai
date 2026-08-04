@@ -55,7 +55,7 @@ function AuthenticatedApp({ user }: { user: SessionUser }) {
       case 'dashboard':
         return <Dashboard onNavigate={setActiveTab} />;
       case 'testdesign':
-        return <TestCases />;
+        return <TestCases canManageAccounts={user.role === 'admin'} />;
       case 'reports':
         return <Reports onNavigate={setActiveTab} />;
       case 'execution':

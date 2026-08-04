@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import { getCdpPort } from './browserBridge'
+import { getLlmConfig } from './llmBridge'
 import type {
   AccountCombination,
   BusinessRole,
@@ -416,7 +417,11 @@ export async function loginTestAccount(accountId: string): Promise<{
   status: 'completed' | 'manual_handoff_required'
   finalUrl?: string
 }> {
-  return await invoke('browser_login_test_account', { accountId, port: getCdpPort() })
+  return await invoke('browser_login_test_account', {
+    accountId,
+    port: getCdpPort(),
+    config: getLlmConfig(),
+  })
 }
 
 export async function captureFailureScreenshot(runId: string, stepId: string): Promise<{ screenshotPath: string }> {

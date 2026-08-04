@@ -13,12 +13,15 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getLlmConfig } from './llmBridge';
 import type { ScenarioTemplate } from '../types';
+import type { BusinessRole } from '../types/workflow';
 import { sanitizeForLlm } from '../utils/privacy';
 
 // ─── Prompt 模板 ──────────────────────────────────────────────────────────────
 
 function buildPrompt(documentText: string, targetUrl: string): string {
-  return `你是一名资深的软件 QA 测试开发工程师。请深度分析下方的需求文档，基于 MetaGPT 的 QA 自动化测试用例规范（Test Case Design Specification），对该需求进行结构化分析、场景建模，并生成一份高质量的自动化测试模板。
+  return `You must preserve business-role handoffs: for a multi-role process, every step has role employee, manager, or hrbp; include each role switch, and keep boundary combinations in variables/description instead of duplicating steps.
+
+你是一名资深的软件 QA 测试开发工程师。请深度分析下方的需求文档，基于 MetaGPT 的 QA 自动化测试用例规范（Test Case Design Specification），对该需求进行结构化分析、场景建模，并生成一份高质量的自动化测试模板。
 
 要求与规范：
 
@@ -60,6 +63,7 @@ ${documentText}
   "steps": [
     {
       "order": 1,
+      "role": "employee",
       "description": "（操作步骤中文描述，输入项用 {{变量名}} 占位）",
       "action": "navigate",
       "selectorHint": "（给 AI 执行器的元素提示定位文字，如：保存按钮，不要带有 html 标签）"
@@ -106,7 +110,64 @@ function extractJson(raw: string): any {
 
 // ─── 校验并补全 AI 生成的模板结构 ─────────────────────────────────────────────
 
+function firstText(source: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function firstArray(source: Record<string, unknown>, keys: string[]): unknown[] | undefined {
+  for (const key of keys) {
+    if (Array.isArray(source[key])) return source[key] as unknown[];
+  }
+  return undefined;
+}
+
+function normalizeBusinessRole(value: unknown): BusinessRole | undefined {
+  const role = String(value ?? '').trim().toLowerCase();
+  if (role === 'employee' || role === 'manager' || role === 'hrbp') return role;
+  if (/员工|employee/.test(role)) return 'employee';
+  if (/上级|主管|经理|manager/.test(role)) return 'manager';
+  if (/hrbp|人力资源/.test(role)) return 'hrbp';
+  return undefined;
+}
+
+function resolveTemplatePayload(raw: unknown): Record<string, unknown> {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  const candidates = [source, source.template, source.scenarioTemplate, source.scenario_template, source.data, source.result]
+    .filter((candidate): candidate is Record<string, unknown> => !!candidate && typeof candidate === 'object' && !Array.isArray(candidate));
+  const payload = candidates.find((candidate) =>
+    ['name', 'templateName', 'template_name', '模板名称', 'steps', 'testSteps', 'test_steps', '测试步骤'].some((key) => key in candidate),
+  ) ?? source;
+
+  return {
+    ...payload,
+    name: firstText(payload, ['name', 'templateName', 'template_name', '模板名称']),
+    description: firstText(payload, ['description', 'templateDescription', 'template_description', '模板说明', '说明']),
+    steps: firstArray(payload, ['steps', 'testSteps', 'test_steps', 'scenarioSteps', '测试步骤', '步骤']),
+    variables: firstArray(payload, ['variables', 'params', 'parameters', '变量']),
+    tags: firstArray(payload, ['tags', 'labels', '标签']),
+  };
+}
+
 function normalizeTemplate(raw: any, documentText: string): ScenarioTemplate {
+  raw = resolveTemplatePayload(raw);
+  const detectedKeys = Object.keys(raw).slice(0, 12).join('、') || '无可识别字段';
+  if (
+    !raw
+    || typeof raw !== 'object'
+    || !String(raw.name ?? '').trim()
+    || !String(raw.description ?? '').trim()
+    || !Array.isArray(raw.steps)
+    || raw.steps.length === 0
+  ) {
+    throw new Error(`AI 返回的模板不完整，未保存占位模板。已识别字段：${detectedKeys}`);
+  }
+
   // 确保必填字段存在
   const id = raw.id || `tpl_auto_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const name = raw.name || '（AI 生成的测试模板）';
@@ -117,6 +178,7 @@ function normalizeTemplate(raw: any, documentText: string): ScenarioTemplate {
   const steps = Array.isArray(raw.steps)
     ? raw.steps.map((s: any, idx: number) => ({
         order: s.order ?? idx + 1,
+        role: normalizeBusinessRole(s.role ?? s.actorRole ?? s.executorRole),
         description: s.description || `步骤 ${idx + 1}`,
         action: s.action || 'click',
         selectorHint: s.selectorHint || undefined,
@@ -175,11 +237,8 @@ export async function generateTemplateFromDocument(
 
   let raw: string;
   try {
-    // 复用现有的 Rust LLM 通道（plan_task 接口，但用 context 传入 Prompt）
-    // 实际上我们把整个 prompt 作为 userIntent 传入，context 留空
-    raw = await invoke<string>('plan_task', {
-      userIntent: sanitizeForLlm(prompt),
-      context: '请严格按照 JSON 格式输出，不要输出任何其他内容。',
+    raw = await invoke<string>('generate_template', {
+      prompt: sanitizeForLlm(prompt),
       config,
     });
   } catch (e) {
@@ -207,11 +266,28 @@ function storageKey(): string {
   return `logicguard_custom_templates_${sessionStorage.getItem('logicguard_user_id') ?? 'anonymous'}`;
 }
 
+function isLegacyPlaceholderTemplate(template: ScenarioTemplate): boolean {
+  const normalizedName = String(template.name ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/（/g, '(')
+    .replace(/）/g, ')')
+    .replace(/\s+/g, '');
+
+  return normalizedName === '(ai生成的测试模板)';
+}
+
 export function loadCustomTemplates(): ScenarioTemplate[] {
   try {
     const raw = localStorage.getItem(storageKey());
     if (!raw) return [];
-    return JSON.parse(raw) as ScenarioTemplate[];
+    const templates = JSON.parse(raw) as ScenarioTemplate[];
+    if (!Array.isArray(templates)) return [];
+    const filtered = templates.filter((template) => !isLegacyPlaceholderTemplate(template));
+    if (filtered.length !== templates.length) {
+      localStorage.setItem(storageKey(), JSON.stringify(filtered));
+    }
+    return filtered;
   } catch {
     return [];
   }

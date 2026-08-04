@@ -12,6 +12,9 @@ import {
 } from './testingBridge'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
+vi.mock('./llmBridge', () => ({
+  getLlmConfig: () => ({ provider: 'openai_compat', model: 'company-model', base_url: 'http://gateway.test' }),
+}))
 
 const invokeMock = vi.mocked(invoke)
 
@@ -141,6 +144,7 @@ describe('testingBridge', () => {
     expect(invokeMock).toHaveBeenCalledWith('browser_login_test_account', {
       accountId: 'account-1',
       port: 9222,
+      config: { provider: 'openai_compat', model: 'company-model', base_url: 'http://gateway.test' },
     })
     expect(JSON.stringify(invokeMock.mock.calls)).not.toMatch(/password|username|credential/i)
   })

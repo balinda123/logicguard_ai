@@ -52,7 +52,7 @@ stdout 最后一行返回 JSON：
 | --- | --- |
 | `check` | 检查 sidecar、浏览器和 CDP 连接状态 |
 | `get_snapshot` | 获取页面结构化快照 |
-| `get_page_content` | 获取页面文本/内容 |
+| `get_page_content` | 根据关键词提取目标章节正文；导航目录仅用于定位，不会进入 AI 输入 |
 | `click` / `hover` / `type` / `press` | 基础元素操作 |
 | `navigate` | URL 导航 |
 | `select` | 下拉选择 |
@@ -60,7 +60,7 @@ stdout 最后一行返回 JSON：
 | `assert` | 文本断言 |
 | `screenshot` | 截图到文件 |
 | `clear_session` | 清除 cookies、localStorage、sessionStorage，并回到安全初始页 |
-| `login_with_credentials` | 仅由 Rust 通过临时环境变量调用的自动登录命令，不接收命令行凭据 |
+| `login_with_credentials` | 仅由 Rust 通过临时环境变量调用；按手工选择器、本地语义规则、Stagehand observe 的顺序定位登录控件，不接收命令行凭据 |
 | `act` | Stagehand 单步自然语言操作 |
 | `observe` | Stagehand 页面观察 |
 | `agent` | Stagehand 闭环 Agent 执行 |
@@ -76,7 +76,7 @@ stdout 最后一行返回 JSON：
 | `LLM_API_KEY` | 从 Windows Credential Manager 或 macOS Keychain 读取后临时注入 |
 | `LLM_BASE_URL` | OpenAI Compatible 服务地址 |
 
-API Key 不应写入 localStorage、SQLite、日志、报告或本目录文件。测试账号登录凭据同样只由 Rust 从系统凭据库读取，并通过短生命周期 `LG_BROWSER_LOGIN_PAYLOAD` 环境变量传给 `login_with_credentials`；sidecar 不输出用户名、密码、验证码或令牌。
+API Key 不应写入 localStorage、SQLite、日志、报告或本目录文件。测试账号登录凭据同样只由 Rust 从系统凭据库读取，并通过短生命周期 `LG_BROWSER_LOGIN_PAYLOAD` 环境变量传给 `login_with_credentials`；AI 兜底只观察控件位置，凭据填充由 Playwright 本地完成，sidecar 不输出用户名、密码、验证码或令牌。
 
 ## CDP 与浏览器约定
 

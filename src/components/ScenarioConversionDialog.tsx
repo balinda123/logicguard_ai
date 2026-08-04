@@ -32,12 +32,17 @@ function fromCase(testCase: TestCase): EditableStep[] {
     .sort((left, right) => left.order - right.order)
     .map((step, index) => ({
       id: makeStepId(index),
-      role: 'employee',
+      role: step.role ?? 'employee',
       actionIntent: step.action,
       assertion: step.expectedResult,
       pageUrl: '',
       selector: '',
     }))
+}
+
+function initialScenarioKind(testCase: TestCase): ScenarioKind {
+  const roles = new Set(testCase.steps.map(step => step.role).filter(Boolean));
+  return testCase.type === 'combination' || roles.size > 1 ? 'workflow' : 'single_role';
 }
 
 function splitLines(value: string): string[] {
@@ -46,7 +51,7 @@ function splitLines(value: string): string[] {
 
 export function ScenarioConversionDialog({ testCase, onClose, onSaved }: ScenarioConversionDialogProps) {
   const [title, setTitle] = useState(testCase.title)
-  const [scenarioKind, setScenarioKind] = useState<ScenarioKind>('single_role')
+  const [scenarioKind, setScenarioKind] = useState<ScenarioKind>(() => initialScenarioKind(testCase))
   const [tagsText, setTagsText] = useState(testCase.module)
   const [preconditionsText, setPreconditionsText] = useState(testCase.preconditions.join('\n'))
   const [steps, setSteps] = useState<EditableStep[]>(() => fromCase(testCase))
@@ -88,7 +93,7 @@ export function ScenarioConversionDialog({ testCase, onClose, onSaved }: Scenari
     try {
       const now = new Date().toISOString()
       const scenario: WorkflowScenario = {
-        id: globalThis.crypto?.randomUUID?.() ?? `workflow-${Date.now()}`,
+        id: '',
         sourceTestCaseId: testCase.id,
         title: title.trim(),
         scenarioKind,
@@ -110,8 +115,9 @@ export function ScenarioConversionDialog({ testCase, onClose, onSaved }: Scenari
       }
       const saved = await saveWorkflowScenario(scenario)
       onSaved(saved)
-    } catch {
-      setNotice('流程场景保存失败，请稍后重试。')
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      setNotice(`流程场景保存失败：${detail}`)
     } finally {
       setSaving(false)
     }

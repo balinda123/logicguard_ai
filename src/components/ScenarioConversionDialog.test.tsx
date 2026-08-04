@@ -47,6 +47,7 @@ describe('ScenarioConversionDialog', () => {
     await waitFor(() => expect(saveWorkflowScenario).toHaveBeenCalledTimes(1))
     const payload = vi.mocked(saveWorkflowScenario).mock.calls[0][0]
     expect(payload).toMatchObject({
+      id: '',
       sourceTestCaseId: 'case-1',
       title: '员工创建目标',
       scenarioKind: 'single_role',
@@ -56,5 +57,35 @@ describe('ScenarioConversionDialog', () => {
     })
     expect(JSON.stringify(payload)).not.toMatch(/password|credential|username/i)
     expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ sourceTestCaseId: 'case-1' }))
+  })
+
+  it('preserves generated account handoffs and defaults them to a workflow scenario', async () => {
+    const onSaved = vi.fn()
+    render(<ScenarioConversionDialog testCase={{
+      ...confirmedCase,
+      type: 'combination',
+      steps: [
+        { order: 1, role: 'employee', action: '提交目标', expectedResult: '提交成功' },
+        { order: 2, role: 'manager', action: '退回目标', expectedResult: '显示退回说明' },
+        { order: 3, role: 'hrbp', action: '终止流程', expectedResult: '流程终止' },
+      ],
+    }} onClose={vi.fn()} onSaved={onSaved} />)
+    const user = userEvent.setup()
+
+    expect(screen.getByRole('combobox', { name: '步骤 1 执行角色' })).toHaveValue('employee')
+    expect(screen.getByRole('combobox', { name: '步骤 2 执行角色' })).toHaveValue('manager')
+    expect(screen.getByRole('combobox', { name: '步骤 3 执行角色' })).toHaveValue('hrbp')
+    expect(screen.getByRole('combobox', { name: '场景类型' })).toHaveValue('workflow')
+
+    await user.click(screen.getByRole('button', { name: '保存流程场景' }))
+    await waitFor(() => expect(saveWorkflowScenario).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(saveWorkflowScenario).mock.calls[0][0]).toMatchObject({
+      scenarioKind: 'workflow',
+      steps: [
+        expect.objectContaining({ role: 'employee' }),
+        expect.objectContaining({ role: 'manager' }),
+        expect.objectContaining({ role: 'hrbp' }),
+      ],
+    })
   })
 })

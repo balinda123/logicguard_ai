@@ -87,6 +87,8 @@ export interface ParameterSet {
   lastRunAt?: string;                 // ISO 时间字符串
 }
 
+import type { BusinessRole } from './workflow';
+
 export interface ScenarioTemplate {
   id: string;
   name: string;
@@ -95,6 +97,8 @@ export interface ScenarioTemplate {
   targetUrl?: string;
   steps: {
     order: number;
+    /** The business actor responsible for this step when the template models a workflow. */
+    role?: BusinessRole;
     description: string;
     action: string;
     selectorHint?: string;
@@ -163,6 +167,8 @@ export type TestCaseStatus = 'draft' | 'confirmed' | 'archived';
 
 export interface TestCaseStep {
   order: number;
+  /** Kept from the scenario template so workflow conversion does not lose account handoffs. */
+  role?: BusinessRole;
   action: string;
   expectedResult: string;
 }
