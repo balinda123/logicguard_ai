@@ -96,6 +96,55 @@ async function resolveLocator(page, locator) {
   return page.locator(locatorSelector(locator));
 }
 
+async function validatedCssLocator(page, selector) {
+  if (typeof selector !== 'string' || !selector.trim()) throw new SessionError('LOGIN_LOCATOR_MISSING');
+  try {
+    await page.evaluate(value => {
+      document.querySelector(value);
+      return true;
+    }, selector);
+  } catch {
+    throw new SessionError('INVALID_LOGIN_LOCATOR');
+  }
+  return page.locator(selector);
+}
+
+async function waitForVisible(page, selector, timeoutMs = 30000) {
+  const locator = await validatedCssLocator(page, selector);
+  const deadline = Date.now() + timeoutMs;
+  while (!(await locator.isVisible())) {
+    if (Date.now() >= deadline) throw new SessionError('LOGIN_REQUIRES_HANDOFF');
+    await page.waitForTimeout(100);
+  }
+  return locator;
+}
+
+async function executeCredentialLogin(stagehand, payload) {
+  const page = await activePage(stagehand);
+  assertAllowedUrl(payload.loginUrl, [payload.allowedOrigin]);
+  await page.goto(payload.loginUrl, { waitUntil: 'domcontentloaded' });
+  assertAllowedUrl(page.url(), [payload.allowedOrigin]);
+  if (payload.pageLocator) await waitForVisible(page, payload.pageLocator);
+  const identity = await waitForVisible(page, payload.identityLocator);
+  const privateField = await waitForVisible(page, payload.privateLocator);
+  const submit = await waitForVisible(page, payload.submitLocator);
+  await identity.fill(payload.username);
+  await privateField.fill(payload.password);
+  await submit.click();
+  if (!payload.successLocator) throw new SessionError('LOGIN_REQUIRES_HANDOFF');
+  await waitForVisible(page, payload.successLocator);
+  assertAllowedUrl(page.url(), [payload.allowedOrigin]);
+  return { status: 'completed', finalOrigin: new URL(page.url()).origin };
+}
+
+async function verifyCredentialLogin(stagehand, payload) {
+  const page = await activePage(stagehand);
+  assertAllowedUrl(page.url(), [payload.allowedOrigin]);
+  if (!payload.successLocator) throw new SessionError('LOGIN_REQUIRES_HANDOFF');
+  await waitForVisible(page, payload.successLocator, 5000);
+  return { status: 'verified', finalOrigin: new URL(page.url()).origin };
+}
+
 async function focusLocator(locator) {
   if (typeof locator.focus === 'function') {
     await locator.focus();
@@ -289,5 +338,7 @@ module.exports = {
   SessionError,
   assertAllowedUrl,
   createSession,
+  executeCredentialLogin,
   locatorSelector,
+  verifyCredentialLogin,
 };

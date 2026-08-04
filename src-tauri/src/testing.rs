@@ -1152,15 +1152,27 @@ pub(crate) fn update_masked_login_name_after_credential_write(
     }
 }
 
-pub(crate) fn load_automatic_login(
+pub(crate) fn load_automatic_login_for_snapshot(
     app: &tauri::AppHandle,
     account_id: &str,
+    system_id: &str,
+    environment_id: &str,
+    role: &str,
+    expected_login_mode: &str,
 ) -> Result<AutomaticBrowserLogin, String> {
     crate::auth::current_user()?;
     let conn = crate::auth::open_db(app)?;
     let account = get_test_account(&conn, account_id)?;
     if !account.is_enabled {
         return Err("TEST_ACCOUNT_DISABLED".to_string());
+    }
+    if account.scope_state != "scoped"
+        || account.system_id.as_deref() != Some(system_id)
+        || account.environment_id.as_deref() != Some(environment_id)
+        || account.business_role != role
+        || account.login_mode != expected_login_mode
+    {
+        return Err("ACCOUNT_SNAPSHOT_MISMATCH".to_string());
     }
     if account.login_mode != "automatic" {
         return Err("MANUAL_HANDOFF_REQUIRED".to_string());

@@ -15,12 +15,15 @@ worker 在同一 Stagehand v3 会话内逐行读取 NDJSON。每个请求最多 
 - 普通 worker 请求拒绝 `password`、`token`、`otp`、`secret`、`credential` 字段、值和占位符。
 - API Key 由 Rust 从操作系统凭据库读取，只在启动 worker 时注入环境，不进入计划、快照、事件、SQLite 或日志。
 - 测试账号密码同样保存在操作系统凭据库；自动登录和人工接管由 Rust 执行边界协调，密码不进入 Stagehand 普通协议。
+- 自动登录由 Rust 启动一次性 `stagehand/login-worker.js`。账号密码只通过该子进程的短生命周期环境值传入，登录 worker 使用 Stagehand Page/Locator API，不开放 NDJSON 命令；完成或失败后立即清空环境入口并退出。
 - 控制标识只接受系统、环境、运行编号和当前步骤，使用 `textContent` 渲染固定“自动化执行中”提示。
 - Windows 仅锁定应用启动并记录 PID 的专用浏览器窗口。外部 CDP 浏览器无法建立可信窗口锁，会在预检阶段阻断。
 
 ## 生命周期
 
 Rust 持有运行状态、浏览器 lease、worker PID、暂停检查点和取消信号。暂停只在原子命令结束并落盘后生效；暂停、人工接管和所有终态都会释放浏览器输入锁。EOF 或 `terminate` 关闭 Stagehand 会话。
+
+运行快照可包含 `accountOrchestration`：system/environment、组合 ID、非敏感账号元数据，以及按 command index 排序的角色步骤。角色变化时 Rust 依据快照选择账号；自动模式读取 keyring，SSO/OTP、缺少凭据/locator 或登录结果需要验证码时进入 `waiting_handoff`。恢复时先使用快照中的成功 locator 校验当前页面身份，再重新申请浏览器输入锁并继续原 checkpoint。
 
 ## 依赖与打包
 

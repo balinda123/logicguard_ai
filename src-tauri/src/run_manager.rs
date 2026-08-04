@@ -5,6 +5,7 @@ use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::{Arc, Mutex}, ti
 use tauri::{AppHandle, Emitter};
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, process::{Child, Command}, sync::Notify};
 use uuid::Uuid;
+use zeroize::Zeroize;
 use crate::interaction_guard::{GuardLease, InteractionGuard, LOCK_UNAVAILABLE};
 
 const ACTIVE_STATUSES: &[&str] = &["queued", "preflight", "running", "pause_requested", "paused", "waiting_handoff"];
@@ -35,7 +36,7 @@ pub fn can_transition(from: RunStatus, to: RunStatus) -> bool {
     use RunStatus::*;
     matches!((from, to),
         (Queued, Preflight | Cancelled | Interrupted) |
-        (Preflight, Running | Blocked | Cancelled | Interrupted) |
+        (Preflight, Running | WaitingHandoff | Blocked | Cancelled | Interrupted) |
         (Running, PauseRequested | WaitingHandoff | Passed | BusinessFailed | Blocked | Cancelled | Interrupted) |
         (PauseRequested, Paused | BusinessFailed | Blocked | Cancelled | Interrupted) |
         (Paused, Queued | Blocked | Cancelled | Interrupted) |
@@ -49,6 +50,56 @@ pub struct ExecutionPlan { pub commands: Vec<Value> }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartRunInput { pub execution_plan: ExecutionPlan, pub snapshot: Value }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunAccountSnapshot {
+    id: String,
+    role: String,
+    login_mode: String,
+    allowed_origin: String,
+    login_page_url: String,
+    page_locator: Option<String>,
+    identity_locator: Option<String>,
+    private_locator: Option<String>,
+    submit_locator: Option<String>,
+    success_locator: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunRoleStepSnapshot { command_index: usize, role: String, account_id: String }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AccountOrchestrationSnapshot {
+    system_id: String,
+    environment_id: String,
+    combination_id: String,
+    accounts: Vec<RunAccountSnapshot>,
+    role_steps: Vec<RunRoleStepSnapshot>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IsolatedLoginPayload {
+    allowed_origin: String,
+    login_url: String,
+    page_locator: Option<String>,
+    identity_locator: Option<String>,
+    private_locator: Option<String>,
+    submit_locator: Option<String>,
+    success_locator: Option<String>,
+    username: String,
+    password: String,
+}
+
+impl Drop for IsolatedLoginPayload {
+    fn drop(&mut self) { self.username.zeroize(); self.password.zeroize(); }
+}
+
+struct SecretProcessValue(String);
+impl Drop for SecretProcessValue { fn drop(&mut self){self.0.zeroize();} }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -167,6 +218,14 @@ fn contains_secret(value: &Value) -> bool { match value {
     _ => false,
 }}
 
+fn contains_snapshot_secret(value:&Value,key:Option<&str>)->bool{match value{
+    Value::String(text) if key.map(|name|name.ends_with("Locator")).unwrap_or(false)=>text.contains("{{")||text.contains("${")||text.to_ascii_lowercase().contains("bearer "),
+    Value::String(_)=>contains_secret(value),
+    Value::Array(items)=>items.iter().any(|item|contains_snapshot_secret(item,key)),
+    Value::Object(map)=>map.iter().any(|(name,item)|SECRET_WORDS.iter().any(|word|name.to_ascii_lowercase().contains(word))||contains_snapshot_secret(item,Some(name))),
+    _=>false,
+}}
+
 fn valid_origin(raw: &str) -> bool {
     let Ok(url)=reqwest::Url::parse(raw) else{return false};
     let host=url.host_str().unwrap_or_default();
@@ -268,6 +327,59 @@ impl ErrorCategory { fn as_str(self)->&'static str { match self { Self::InvalidR
 pub struct RetryPolicy { pub max_attempts:u32, pub base_delay_ms:u64 }
 impl RetryPolicy { pub fn decision(&self,attempt:u32,category:ErrorCategory)->RetryDecision { match category { ErrorCategory::BusinessAssertion=>RetryDecision::BusinessFailed, ErrorCategory::Cancelled=>RetryDecision::Cancelled, ErrorCategory::Interrupted=>RetryDecision::Interrupted, ErrorCategory::ModelResponse|ErrorCategory::RateLimited|ErrorCategory::Timeout|ErrorCategory::Connection if attempt<self.max_attempts=>RetryDecision::RetryAfter(self.base_delay_ms.saturating_mul(1u64 << attempt.saturating_sub(1))), _=>RetryDecision::Blocked } } }
 
+fn account_orchestration(snapshot:&Value, command_count:usize)->Result<Option<AccountOrchestrationSnapshot>,String>{
+    let Some(raw)=snapshot.get("accountOrchestration") else{return Ok(None)};
+    let value:AccountOrchestrationSnapshot=serde_json::from_value(raw.clone()).map_err(|_|"INVALID_ACCOUNT_ORCHESTRATION".to_string())?;
+    if value.system_id!=snapshot.get("systemId").and_then(Value::as_str).unwrap_or_default()
+        || value.environment_id!=snapshot.get("environmentId").and_then(Value::as_str).unwrap_or_default()
+        || value.combination_id.trim().is_empty() || value.accounts.is_empty() || value.role_steps.is_empty(){return Err("ACCOUNT_SNAPSHOT_SCOPE_MISMATCH".into())}
+    let mut ids=HashSet::new();
+    for account in &value.accounts{
+        if !ids.insert(account.id.as_str()) || !matches!(account.role.as_str(),"employee"|"manager"|"hrbp")
+            || !matches!(account.login_mode.as_str(),"automatic"|"manual_sso"|"manual_otp")
+            || !valid_origin(&account.allowed_origin)
+            || reqwest::Url::parse(&account.login_page_url).ok().map(|url|url.username().is_empty()&&url.password().is_none()&&matches!(url.scheme(),"http"|"https")&&url.origin().ascii_serialization()==account.allowed_origin).unwrap_or(false)==false{return Err("INVALID_ACCOUNT_SNAPSHOT".into())}
+    }
+    if value.role_steps.first().map(|step|step.command_index)!=Some(0){return Err("INVALID_ROLE_STEP_ORDER".into())}
+    let mut previous=None;
+    for step in &value.role_steps{
+        if step.command_index>=command_count || previous.map(|index|step.command_index<=index).unwrap_or(false){return Err("INVALID_ROLE_STEP_ORDER".into())}
+        let account=value.accounts.iter().find(|account|account.id==step.account_id).ok_or("ACCOUNT_SNAPSHOT_MISMATCH")?;
+        if account.role!=step.role{return Err("ACCOUNT_SNAPSHOT_MISMATCH".into())}
+        previous=Some(step.command_index);
+    }
+    Ok(Some(value))
+}
+
+fn role_account_at(orchestration:&AccountOrchestrationSnapshot,index:usize)->Option<&RunAccountSnapshot>{
+    let role_step=orchestration.role_steps.iter().rev().find(|step|step.command_index<=index)?;
+    orchestration.accounts.iter().find(|account|account.id==role_step.account_id && account.role==role_step.role)
+}
+
+fn checkpoint_text<'a>(run:&'a ExecutionRun,key:&str)->Option<&'a str>{run.checkpoint.as_ref()?.get(key)?.as_str()}
+
+async fn isolated_login(app:&AppHandle,account:&RunAccountSnapshot,system_id:&str,environment_id:&str,verify:bool)->Result<(),String>{
+    let (node,index)=crate::browser::runtime_assets()?;
+    let worker=index.parent().ok_or("SIDECAR_RESOURCE_PATH")?.join("stagehand").join("login-worker.js");
+    if !worker.is_file(){return Err("STAGEHAND_LOGIN_WORKER_MISSING".into())}
+    let (username,password)=if verify{(String::new(),String::new())}else{
+        let login=crate::testing::load_automatic_login_for_snapshot(app,&account.id,system_id,environment_id,&account.role,&account.login_mode)?;
+        let mut credential=login.credential;
+        (std::mem::take(&mut credential.username),std::mem::take(&mut credential.password))
+    };
+    let payload=IsolatedLoginPayload{allowed_origin:account.allowed_origin.clone(),login_url:account.login_page_url.clone(),page_locator:account.page_locator.clone(),identity_locator:account.identity_locator.clone(),private_locator:account.private_locator.clone(),submit_locator:account.submit_locator.clone(),success_locator:account.success_locator.clone(),username,password};
+    if !verify && [payload.identity_locator.as_ref(),payload.private_locator.as_ref(),payload.submit_locator.as_ref(),payload.success_locator.as_ref()].iter().any(|value|value.map(|text|text.trim().is_empty()).unwrap_or(true)){return Err("LOGIN_REQUIRES_HANDOFF".into())}
+    if verify && payload.success_locator.as_ref().map(|text|text.trim().is_empty()).unwrap_or(true){return Err("LOGIN_REQUIRES_HANDOFF".into())}
+    let serialized=SecretProcessValue(serde_json::to_string(&payload).map_err(|_|"LOGIN_PAYLOAD_SERIALIZATION_FAILED".to_string())?);
+    let api_key=crate::auth::current_api_key().ok().map(SecretProcessValue);
+    let mut command=Command::new(node);
+    command.arg(worker).env("LOGICGUARD_CDP_URL","http://127.0.0.1:9222").env("LOGICGUARD_LOGIN_MODE",if verify{"verify"}else{"login"}).env("LOGICGUARD_LOGIN_PAYLOAD",&serialized.0).env("LLM_PROVIDER","gemini").env("LLM_MODEL","gemini-2.0-flash");
+    if let Some(key)=&api_key{command.env("LLM_API_KEY",&key.0);}
+    let output=tokio::time::timeout(Duration::from_secs(45),command.output()).await.map_err(|_|"LOGIN_REQUIRES_HANDOFF".to_string())?.map_err(|_|"LOGIN_REQUIRES_HANDOFF".to_string())?;
+    let envelope:Value=serde_json::from_slice(&output.stdout).map_err(|_|"LOGIN_REQUIRES_HANDOFF".to_string())?;
+    if envelope.get("ok").and_then(Value::as_bool)==Some(true){Ok(())}else{Err(envelope.get("error").and_then(|value|value.get("code")).and_then(Value::as_str).unwrap_or("LOGIN_REQUIRES_HANDOFF").to_string())}
+}
+
 struct ControlEntry { state:Mutex<RunControl>, cancelled:Notify }
 impl Default for ControlEntry { fn default()->Self{Self{state:Mutex::new(RunControl::default()),cancelled:Notify::new()}} }
 
@@ -291,7 +403,7 @@ impl RunManager {
         let run=load_run(&conn,id)?.ok_or("NOT_FOUND")?; self.emit_run(&run); self.record_event(id,to.as_str(),json!({"status":to}))?;if releases_interaction_guard(to){self.release_interaction_guard(id)?;} Ok(run)
     }
     pub fn start(&self,input:StartRunInput)->Result<String,String>{
-        validate_plan(&input.execution_plan)?; if !input.snapshot.is_object(){return Err("SNAPSHOT_MUST_BE_OBJECT".into());}if contains_secret(&input.snapshot){return Err("SECRET_NOT_ALLOWED".into());}
+        validate_plan(&input.execution_plan)?; if !input.snapshot.is_object(){return Err("SNAPSHOT_MUST_BE_OBJECT".into());}if contains_snapshot_secret(&input.snapshot,None){return Err("SECRET_NOT_ALLOWED".into());}account_orchestration(&input.snapshot,input.execution_plan.commands.len())?;
         let owner=crate::auth::current_user_id()?; let id=Uuid::new_v4().to_string(); let conn=self.db()?;
         conn.execute("INSERT INTO execution_runs(id,owner_id,status,snapshot_json,execution_plan_json) VALUES(?1,?2,'queued',?3,?4)",params![id,owner,json_text(&input.snapshot)?,plan_text(&input.execution_plan)?]).map_err(|e|e.to_string())?;
         self.controls.lock().map_err(|_|"RUN_CONTROL_LOCK".to_string())?.insert(id.clone(),Arc::new(ControlEntry::default()));
@@ -307,6 +419,18 @@ impl RunManager {
     fn spawn_next(&self){ if let Ok(conn)=self.db(){ if let Ok(Some(id))=conn.query_row("SELECT id FROM execution_runs WHERE status='queued' ORDER BY created_at LIMIT 1",[],|r|r.get::<_,String>(0)).optional(){let manager=self.clone();tokio::spawn(async move{manager.execute_queued(id).await;});} } }
     async fn execute_with_lease(&self,id:&str)->Result<(),String>{
         self.transition(id,RunStatus::Preflight,None,None)?; let run=self.owned(id)?; validate_plan(&run.execution_plan).map_err(|e|{let _=self.transition(id,RunStatus::Blocked,Some("invalid_request"),Some(&e));e})?;
+        let orchestration=account_orchestration(&run.snapshot,run.execution_plan.commands.len()).map_err(|error|{let _=self.transition(id,RunStatus::Blocked,Some("invalid_request"),Some(&error));error})?;
+        let mut active_role=checkpoint_text(&run,"activeRole").map(str::to_string);
+        if run.checkpoint.as_ref().and_then(|value|value.get("handoffPending")).and_then(Value::as_bool)==Some(true){
+            let account=orchestration.as_ref().and_then(|value|role_account_at(value,run.current_step as usize)).ok_or("ACCOUNT_SNAPSHOT_MISMATCH")?;
+            if let Err(error)=isolated_login(&self.app,account,run.snapshot["systemId"].as_str().unwrap_or_default(),run.snapshot["environmentId"].as_str().unwrap_or_default(),true).await{
+                self.record_event(id,"handoff_required",json!({"step":run.current_step,"role":&account.role,"reason":sanitize(&error)}))?;
+                self.transition(id,RunStatus::WaitingHandoff,None,Some("Manual login verification required"))?;return Ok(())
+            }
+            active_role=Some(account.role.clone());
+            self.db()?.execute("UPDATE execution_runs SET checkpoint_json=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2",params![json_text(&json!({"nextStep":run.current_step,"activeRole":&account.role,"handoffPending":false}))?,id]).map_err(|error|error.to_string())?;
+            self.record_event(id,"identity_verified",json!({"step":run.current_step,"role":&account.role}))?;
+        }
         let mut worker=WorkerProcess::spawn(&self.app).await.map_err(|e|{let category=classify_message(&e);let _=self.transition(id,RunStatus::Blocked,Some(category.as_str()),Some(&sanitize(&e)));e})?;
         self.persist_worker(id,&worker)?;if let Err(failure)=worker.set_control_marker(&marker_for_run(&run,run.current_step)).await{worker.terminate().await;self.transition(id,RunStatus::Blocked,Some("blocked"),Some(&sanitize(&failure.message)))?;return Ok(())}
         let guard_result=self.acquire_interaction_guard(id);if status_after_guard_acquisition(guard_result.is_ok())==RunStatus::Blocked{let error=guard_result.err().unwrap_or_else(||LOCK_UNAVAILABLE.to_string());let _=worker.remove_control_marker().await;worker.terminate().await;self.transition(id,RunStatus::Blocked,Some("blocked"),Some(LOCK_UNAVAILABLE))?;return Err(error)}
@@ -316,6 +440,18 @@ impl RunManager {
             let cancelled={control.state.lock().map_err(|_|"RUN_CONTROL_LOCK".to_string())?.cancelled};
             if cancelled {let _=worker.remove_control_marker().await;worker.terminate().await;self.release_interaction_guard(id)?;self.transition(id,RunStatus::Cancelled,Some("cancelled"),Some("Terminated by user"))?; return Ok(()); }
             if let Err(failure)=worker.set_control_marker(&marker_for_run(&run,index as i64)).await{worker.terminate().await;self.transition(id,RunStatus::Blocked,Some("blocked"),Some(&sanitize(&failure.message)))?;return Ok(())}
+            if let Some(account)=orchestration.as_ref().and_then(|value|role_account_at(value,index)){
+                if active_role.as_deref()!=Some(account.role.as_str()){
+                    let login_result=if account.login_mode=="automatic"{isolated_login(&self.app,account,run.snapshot["systemId"].as_str().unwrap_or_default(),run.snapshot["environmentId"].as_str().unwrap_or_default(),false).await}else{Err("MANUAL_HANDOFF_REQUIRED".into())};
+                    if let Err(error)=login_result{
+                        self.db()?.execute("UPDATE execution_runs SET checkpoint_json=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2",params![json_text(&json!({"nextStep":index,"handoffPending":true,"pendingRole":&account.role,"accountId":&account.id}))?,id]).map_err(|cause|cause.to_string())?;
+                        self.record_event(id,"handoff_required",json!({"step":index,"role":&account.role,"reason":sanitize(&error)}))?;
+                        let _=worker.remove_control_marker().await;worker.terminate().await;self.transition(id,RunStatus::WaitingHandoff,None,Some("Manual login required"))?;return Ok(())
+                    }
+                    active_role=Some(account.role.clone());
+                    self.record_event(id,"role_switched",json!({"step":index,"role":&account.role,"accountId":&account.id}))?;
+                }
+            }
             let mut attempt=1; loop { match worker.send(index,command,&control.cancelled,|data|{let _=self.record_event(id,"progress",json!({"step":index,"data":data}));}).await {
                 Ok(data)=>{self.record_event(id,"progress",json!({"step":index,"data":data}))?;break},
                 Err(failure)=>match policy.decision(attempt,failure.category){
@@ -326,7 +462,7 @@ impl RunManager {
                     RetryDecision::Blocked=>{worker.terminate().await;self.transition(id,RunStatus::Blocked,Some(failure.category.as_str()),Some(&failure.message))?;return Ok(())},
                 }
             }}
-            let checkpoint=(index+1) as i64; self.db()?.execute("UPDATE execution_runs SET current_step=?1,checkpoint_json=?2,updated_at=CURRENT_TIMESTAMP WHERE id=?3",params![checkpoint,json_text(&json!({"nextStep":checkpoint}))?,id]).map_err(|e|e.to_string())?;
+            let checkpoint=(index+1) as i64; self.db()?.execute("UPDATE execution_runs SET current_step=?1,checkpoint_json=?2,updated_at=CURRENT_TIMESTAMP WHERE id=?3",params![checkpoint,json_text(&json!({"nextStep":checkpoint,"activeRole":active_role,"handoffPending":false}))?,id]).map_err(|e|e.to_string())?;
             let decision={control.state.lock().map_err(|_|"RUN_CONTROL_LOCK".to_string())?.after_command(checkpoint)};
             match decision{
                 ControlDecision::Continue=>{},ControlDecision::PauseAt(_)=>{let _=worker.remove_control_marker().await;worker.terminate().await;self.transition(id,RunStatus::Paused,None,None)?;return Ok(())},ControlDecision::Cancel=>{let _=worker.remove_control_marker().await;worker.terminate().await;self.release_interaction_guard(id)?;self.transition(id,RunStatus::Cancelled,Some("cancelled"),Some("Terminated by user"))?;return Ok(())}

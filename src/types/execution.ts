@@ -23,6 +23,27 @@ export type ExecutionErrorCategory =
 
 export interface ExecutionPlan { commands: readonly Record<string, unknown>[] }
 
+export interface ExecutionRunAccountSnapshot {
+  id: string
+  role: 'employee' | 'manager' | 'hrbp'
+  loginMode: 'automatic' | 'manual_sso' | 'manual_otp'
+  allowedOrigin: string
+  loginPageUrl: string
+  pageLocator?: string
+  identityLocator?: string
+  privateLocator?: string
+  submitLocator?: string
+  successLocator?: string
+}
+
+export interface ExecutionAccountOrchestrationSnapshot {
+  systemId: string
+  environmentId: string
+  combinationId: string
+  accounts: readonly ExecutionRunAccountSnapshot[]
+  roleSteps: readonly { commandIndex: number; role: ExecutionRunAccountSnapshot['role']; accountId: string }[]
+}
+
 export interface StartRunInput {
   executionPlan: ExecutionPlan
   snapshot: Readonly<Record<string, unknown>>

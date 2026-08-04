@@ -147,3 +147,32 @@ fn parity_failures_rate_limits_cancellation_and_reports_have_distinct_outcomes()
     assert_eq!(report.status, RunStatus::BusinessFailed);
     assert_eq!(events_after(&conn, "report-run", 0).unwrap().len(), 1);
 }
+
+#[test]
+fn account_orchestration_is_scoped_ordered_and_contains_no_credentials() {
+    let snapshot = json!({
+        "systemId":"system-1","environmentId":"environment-1",
+        "accountOrchestration":{
+            "systemId":"system-1","environmentId":"environment-1","combinationId":"combo-1",
+            "accounts":[{
+                "id":"employee-1","role":"employee","loginMode":"automatic",
+                "allowedOrigin":"https://example.test","loginPageUrl":"https://example.test/login",
+                "identityLocator":"#username","privateLocator":"input[type=password]",
+                "submitLocator":"#submit","successLocator":"#home"
+            }],
+            "roleSteps":[{"commandIndex":0,"role":"employee","accountId":"employee-1"}]
+        }
+    });
+    let orchestration=account_orchestration(&snapshot,1).unwrap().unwrap();
+    assert_eq!(role_account_at(&orchestration,0).unwrap().id,"employee-1");
+    assert!(!contains_snapshot_secret(&snapshot,None));
+    assert!(contains_snapshot_secret(&json!({"password":"not-allowed"}),None));
+}
+
+#[test]
+fn account_orchestration_rejects_cross_scope_and_uncovered_commands() {
+    let cross_scope=json!({"systemId":"system-1","environmentId":"environment-1","accountOrchestration":{"systemId":"system-2","environmentId":"environment-1","combinationId":"combo","accounts":[],"roleSteps":[]}});
+    assert!(account_orchestration(&cross_scope,1).is_err());
+    let uncovered=json!({"systemId":"system-1","environmentId":"environment-1","accountOrchestration":{"systemId":"system-1","environmentId":"environment-1","combinationId":"combo","accounts":[{"id":"a","role":"employee","loginMode":"manual_sso","allowedOrigin":"https://example.test","loginPageUrl":"https://example.test/login"}],"roleSteps":[{"commandIndex":1,"role":"employee","accountId":"a"}]}});
+    assert!(account_orchestration(&uncovered,2).is_err());
+}

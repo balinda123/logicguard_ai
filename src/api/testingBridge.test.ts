@@ -2,11 +2,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  captureFailureScreenshot,
-  clearBrowserSession,
   createTestAccount,
   createScopedWorkflowRun,
-  loginTestAccount,
   listDefectDrafts,
   listFailureEvidence,
   listAccountCombinations,
@@ -128,11 +125,7 @@ describe('testingBridge', () => {
     })
   })
 
-  it('uses backend-owned failure evidence paths and workflow scenario payloads', async () => {
-    invokeMock.mockResolvedValueOnce({
-      screenshotPath: 'failure-evidence/run-1/step-1-123.png',
-    })
-    invokeMock.mockResolvedValueOnce(undefined)
+  it('maps workflow scenario payloads', async () => {
     invokeMock.mockResolvedValueOnce({
       id: 'scenario-1',
       name: 'Employee creates a goal',
@@ -145,8 +138,6 @@ describe('testingBridge', () => {
       updatedAt: '2026-07-28T00:00:00.000Z',
     })
 
-    await captureFailureScreenshot('run-1', 'step-1')
-    await clearBrowserSession()
     await saveWorkflowScenario({
       id: 'scenario-1',
       title: 'Employee creates a goal',
@@ -159,13 +150,7 @@ describe('testingBridge', () => {
       updatedAt: '2026-07-28T00:00:00.000Z',
     })
 
-    expect(invokeMock).toHaveBeenNthCalledWith(1, 'browser_capture_failure_screenshot', {
-      runId: 'run-1',
-      stepId: 'step-1',
-      port: 9222,
-    })
-    expect(invokeMock).toHaveBeenNthCalledWith(2, 'browser_clear_session', { port: 9222 })
-    expect(invokeMock).toHaveBeenNthCalledWith(3, 'save_workflow_scenario', {
+    expect(invokeMock).toHaveBeenCalledWith('save_workflow_scenario', {
       input: expect.objectContaining({
         id: 'scenario-1',
         name: 'Employee creates a goal',
@@ -174,18 +159,4 @@ describe('testingBridge', () => {
     })
   })
 
-  it('starts automatic login by account id without receiving credentials', async () => {
-    invokeMock.mockResolvedValueOnce({ status: 'completed', finalUrl: 'https://example.test/home' })
-
-    await expect(loginTestAccount('account-1')).resolves.toEqual({
-      status: 'completed',
-      finalUrl: 'https://example.test/home',
-    })
-
-    expect(invokeMock).toHaveBeenCalledWith('browser_login_test_account', {
-      accountId: 'account-1',
-      port: 9222,
-    })
-    expect(JSON.stringify(invokeMock.mock.calls)).not.toMatch(/password|username|credential/i)
-  })
 })
