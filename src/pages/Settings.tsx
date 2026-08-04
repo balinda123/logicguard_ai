@@ -105,7 +105,6 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
 interface StorageLocations {
   appDataDir: string;
   usersDbPath: string;
-  currentUserReportPath: string;
   chromeProfileDir: string;
   credentialService: string;
   credentialAccount: string;
@@ -527,11 +526,11 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
             <div className="rounded-lg border border-border bg-surface-2/60 p-3 space-y-2">
               <div className="flex items-center gap-1.5 text-[11px] font-bold text-text-primary">
                 <FileText className="w-3.5 h-3.5 text-brand-400" />
-                当前用户测试报告
+                运行与报告数据库
               </div>
-              <div className="text-[10px] text-text-muted leading-relaxed">报告按登录用户隔离保存，其他用户看不到你的报告。</div>
+              <div className="text-[10px] text-text-muted leading-relaxed">运行、事件和报告保存在 SQLite，并由当前会话按用户隔离读取。</div>
               <code className="block rounded-md bg-surface-3 px-2 py-1.5 text-[10px] text-text-secondary break-all">
-                {storageLocations?.currentUserReportPath || '正在读取...'}
+                {storageLocations?.usersDbPath || '正在读取...'}
               </code>
             </div>
 

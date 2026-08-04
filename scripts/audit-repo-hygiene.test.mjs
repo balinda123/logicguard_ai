@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { expect, test } from 'vitest';
 
-import { classifyPath } from './audit-repo-hygiene.mjs';
+import { auditForbiddenProductionTokens, classifyPath } from './audit-repo-hygiene.mjs';
 
 const auditScript = resolve('scripts/audit-repo-hygiene.mjs');
 
@@ -16,7 +16,7 @@ test('classifies generated repository paths', () => {
 
 test('keeps tests and source files classified as source', () => {
   expect(classifyPath('src/pages/TestCases.test.tsx')).toBe('source');
-  expect(classifyPath('src/agents/scriptExecutor.ts')).toBe('source');
+  expect(classifyPath('src/api/runBridge.ts')).toBe('source');
   expect(classifyPath('artifacts/runs-old/trace.zip')).toBe('source');
   expect(classifyPath('coverage-report/index.html')).toBe('source');
 });
@@ -57,10 +57,14 @@ test('CLI lists generated paths and exits with status 1', () => {
 test('CLI accepts source paths without findings', () => {
   const result = spawnSync(
     process.execPath,
-    [auditScript, 'src/agents/scriptExecutor.ts'],
+    [auditScript, 'src/api/runBridge.ts'],
     { encoding: 'utf8' },
   );
 
   expect(result.status).toBe(0);
   expect(result.stdout).toBe('');
+});
+
+test('production sources contain no legacy executor or direct browser driver path', () => {
+  expect(auditForbiddenProductionTokens()).toEqual([]);
 });

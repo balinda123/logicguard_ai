@@ -11,7 +11,6 @@ const CREDENTIAL_SERVICE: &str = "com.logicguard.ai";
 pub struct StorageLocations {
     pub app_data_dir: String,
     pub users_db_path: String,
-    pub current_user_report_path: String,
     pub chrome_profile_dir: String,
     pub credential_service: String,
     pub credential_account: String,
@@ -27,10 +26,6 @@ pub fn get_storage_locations(app: tauri::AppHandle) -> Result<StorageLocations, 
     Ok(StorageLocations {
         app_data_dir: app_data_dir.display().to_string(),
         users_db_path: app_data_dir.join("logicguard.db").display().to_string(),
-        current_user_report_path: app_data_dir
-            .join(format!("logicguard_reports_{}.json", user.id))
-            .display()
-            .to_string(),
         chrome_profile_dir: app_data_dir.join("ChromeProfile").display().to_string(),
         credential_service: CREDENTIAL_SERVICE.to_string(),
         credential_account: user.id,

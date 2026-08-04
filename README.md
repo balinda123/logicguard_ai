@@ -1,6 +1,10 @@
 # 测试小助手
 
-测试小助手是一个 Windows / macOS 桌面自动化测试工具。用户用自然语言描述任务，应用通过云端大模型生成操作，再由本机 Playwright + Stagehand sidecar 连接 Chrome CDP 执行。
+> 当前执行架构：测试设计按“系统 + 环境”隔离，执行中心、报告和问题跟踪跨系统统一展示。所有生产浏览器步骤由 Rust 持久运行管理器调度到 Stagehand worker；前端直连 Playwright/CDP 和旧脚本执行器已删除。运行、事件和报告来自 SQLite，API Key 与测试账号凭据保存在操作系统凭据库。
+
+架构升级、旧数据迁移、回滚与清理规则见 [system-scoped-stagehand-v1](./docs/migrations/system-scoped-stagehand-v1.md)。
+
+测试小助手是一个桌面自动化测试工具。用户从系统级测试设计发起回归，Rust 在后台调度本机 Stagehand worker 连接专用 Chrome CDP 执行。
 
 ## 当前能力
 
@@ -12,17 +16,15 @@
 - 全局报告与问题：任务控制台、执行中心、测试报告和问题跟踪可按系统、环境、状态和时间筛选；只有 `business_failed` 形成缺陷，`blocked/cancelled/interrupted` 仅作为运行诊断
 - 问题跟踪：失败自动生成待确认草稿，确认后进入修复/验证生命周期，支持筛选并导出 Excel 或 CSV
 
-- Stagehand Agent 当前主执行路径
-- 确定性 Script、Classic Planner/Generator/Healer 代码保留为备用能力，当前 UI 不暴露切换入口
+- Stagehand 是唯一生产浏览器执行路径；确定性 locator 与受限语义 Agent 共用同一持久 worker
 - “测试设计”：先选择系统和本地/测试环境，再从设计列表进入“需求来源 → 生成用例 → 检查确认 → 回归执行”；四阶段数据统一持久化到同一设计，切换系统或设计不会混用上次结果
-- 回归套件：已确认用例可加入套件并一键批量执行，执行结果写入用户报告
-- 用例执行优先走确定性 Script 生成与回放，适合沉淀发版前回归流程
+- 回归套件：已确认用例可加入套件并一键批量执行，运行和报告写入 SQLite
 - 场景模板、执行日志、自愈记录和测试报告
 - 报告包含管理摘要、风险等级、发版建议、失败复现路径和技术日志
 - 本地管理员/普通用户登录
 - 管理员用户列表、创建用户、禁用用户和重置密码
 - 系统设置页展示本机数据存储位置，并可打开应用数据目录
-- 按用户隔离模型配置、模板和报告
+- 按用户隔离模型配置、模板、测试设计和运行报告
 - API Key 保存到 Windows Credential Manager 或 macOS Keychain
 - 模型提供商提供 DeepSeek、OpenAI、通义千问、Kimi、智谱、豆包、Gemini、Ollama 和自定义 OpenAI Compatible 预设
 - 数据安全模式默认“严格脱敏”，发送给模型前会遮蔽手机号、身份证、邮箱、银行卡、薪资、部门等敏感值

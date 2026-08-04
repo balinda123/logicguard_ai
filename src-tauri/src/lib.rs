@@ -3,7 +3,6 @@ mod browser;
 mod interaction_guard;
 mod legacy_migration;
 mod llm;
-mod reports;
 mod run_manager;
 mod storage;
 mod test_design;
@@ -48,8 +47,6 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             // 本地报告文件持久化命令
-            reports::save_reports_to_file,
-            reports::load_reports_from_file,
             auth::auth_status,
             auth::initialize_admin,
             auth::login,
@@ -124,26 +121,11 @@ pub fn run() {
             llm::heal_step,
             llm::generate_test_script,
             // 浏览器 CDP 控制命令
-            browser::browser_get_snapshot,
-            browser::browser_click,
-            browser::browser_hover,
-            browser::browser_type,
-            browser::browser_press,
-            browser::browser_navigate,
-            browser::browser_assert,
-            browser::browser_login_test_account,
-            browser::browser_clear_session,
-            browser::browser_capture_failure_screenshot,
             browser::browser_check_connection,
             browser::browser_check_sidecar,
             browser::launch_chrome_cdp,
             browser::get_chrome_path,
-            browser::browser_get_page_content,
             // Stagehand AI 智能执行命令
-            browser::browser_act,
-            browser::browser_observe,
-            browser::browser_run_agent,
-            browser::browser_terminate_agent,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

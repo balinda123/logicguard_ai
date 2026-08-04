@@ -61,6 +61,16 @@ test('uses deterministic Stagehand page locators without observe', async () => {
   assert.equal(fake.calls.filter(([name]) => name === 'observe').length, 0);
 });
 
+test('fills a semantic label locator without exposing a direct browser driver', async () => {
+  const fake = createFakeStagehand();
+  const session = createSession({ stagehand: fake, allowedOrigins: ['https://test.example'] });
+
+  await session.execute({ action: 'fill', locator: { kind: 'label', value: 'Employee name' }, value: 'employee-a' });
+
+  assert.deepEqual(fake.calls.find(([name]) => name === 'fill'), ['fill', 'employee-a']);
+  assert.equal(fake.calls.filter(([name]) => name === 'observe').length, 0);
+});
+
 test('validates css with the browser native selector parser before using it', async () => {
   const fake = createFakeStagehand();
   const session = createSession({ stagehand: fake, allowedOrigins: ['https://test.example'] });

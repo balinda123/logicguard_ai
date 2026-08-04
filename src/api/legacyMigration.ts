@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { loadLegacyTestCases, loadSuites } from './testCaseStore'
 
 const MIGRATION_MARKER = 'logicguard_test_design_migration_v1'
+// Read-only compatibility source. Remove with the 0.2.0 migration cleanup.
+export const LEGACY_READER_REMOVAL_VERSION = '0.2.0'
 
 export interface LegacyMigrationResult {
   migrationVersion: string

@@ -25,7 +25,6 @@ await mkdir(sidecarDir, { recursive: true });
 const nodeSource = process.env.LOGICGUARD_NODE_BINARY || process.execPath;
 await cp(nodeSource, runtimeTarget);
 await cp(join(root, 'sidecar', 'index.js'), join(sidecarDir, 'index.js'));
-await cp(join(root, 'sidecar', 'session.js'), join(sidecarDir, 'session.js'));
 await cp(join(root, 'sidecar', 'stagehand'), join(sidecarDir, 'stagehand'), { recursive: true });
 await cp(join(root, 'sidecar', 'package.json'), join(sidecarDir, 'package.json'));
 await cp(join(root, 'sidecar', 'package-lock.json'), join(sidecarDir, 'package-lock.json'));

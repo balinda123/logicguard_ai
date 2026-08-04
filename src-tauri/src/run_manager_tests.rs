@@ -122,3 +122,28 @@ fn execution_plan_rejects_arbitrary_commands_and_secrets() {
     assert!(validate_plan(&ExecutionPlan { commands: vec![json!({"command":"script", "source":"alert(1)"})] }).is_err());
     assert!(validate_plan(&ExecutionPlan { commands: vec![json!({"command":"act", "instruction":"use {{password}}", "allowedOrigins":["https://example.test"], "timeoutMs":1000})] }).is_err());
 }
+
+#[test]
+fn parity_manual_handoff_and_role_switch_are_persisted_as_ordered_events() {
+    let mut conn = database();
+    insert_run_for_test(&conn, "role-run", RunStatus::WaitingHandoff, &plan(), &json!({"roles":["employee","manager"]})).unwrap();
+    assert!(can_transition(RunStatus::Running, RunStatus::WaitingHandoff));
+    assert!(can_transition(RunStatus::WaitingHandoff, RunStatus::Queued));
+    let handoff = append_event(&mut conn, "role-run", "handoff_required", &json!({"role":"manager"})).unwrap();
+    let resumed = append_event(&mut conn, "role-run", "role_switched", &json!({"role":"manager"})).unwrap();
+    assert_eq!((handoff.sequence, resumed.sequence), (1, 2));
+}
+
+#[test]
+fn parity_failures_rate_limits_cancellation_and_reports_have_distinct_outcomes() {
+    assert_eq!(RetryPolicy { max_attempts: 3, base_delay_ms: 10 }.decision(1, ErrorCategory::BusinessAssertion), RetryDecision::BusinessFailed);
+    assert_eq!(classify_message("HTTP 429 concurrency rate limit"), ErrorCategory::RateLimited);
+    assert_eq!(completion_for_stop(true, false), RunStatus::Cancelled);
+
+    let mut conn = database();
+    insert_run_for_test(&conn, "report-run", RunStatus::BusinessFailed, &plan(), &json!({"suiteName":"approval"})).unwrap();
+    append_event(&mut conn, "report-run", "business_failed", &json!({"step":1})).unwrap();
+    let report = load_run(&conn, "report-run").unwrap().unwrap();
+    assert_eq!(report.status, RunStatus::BusinessFailed);
+    assert_eq!(events_after(&conn, "report-run", 0).unwrap().len(), 1);
+}
