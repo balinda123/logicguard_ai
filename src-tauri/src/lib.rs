@@ -3,7 +3,11 @@ mod browser;
 mod llm;
 mod reports;
 mod storage;
+mod test_design;
 mod testing;
+
+#[cfg(test)]
+mod test_design_tests;
 
 #[cfg(test)]
 mod testing_tests;
@@ -37,6 +41,23 @@ pub fn run() {
             auth::reset_user_password,
             auth::save_api_key,
             auth::credential_status,
+            test_design::list_systems,
+            test_design::create_system,
+            test_design::update_system,
+            test_design::list_system_environments,
+            test_design::create_system_environment,
+            test_design::update_system_environment,
+            test_design::list_test_designs,
+            test_design::create_test_design,
+            test_design::update_test_design,
+            test_design::list_requirement_versions,
+            test_design::create_requirement_version,
+            test_design::list_generation_batches,
+            test_design::create_generation_batch,
+            test_design::list_review_records,
+            test_design::create_review,
+            test_design::get_regression_config,
+            test_design::save_regression_config,
             testing::list_test_accounts,
             testing::create_test_account,
             testing::update_test_account,
