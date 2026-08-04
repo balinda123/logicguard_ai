@@ -1,5 +1,30 @@
 # LogicGuard Sidecar
 
+## Persistent Stagehand worker
+
+`stagehand/worker.js` is the NDJSON worker entry for the Rust-owned execution
+lifecycle. It may also be started through the compatibility CLI:
+
+```bash
+node index.js stagehand-worker
+```
+
+The worker initializes one local Stagehand v3 session, consumes one JSON request
+per stdin line, and writes protocol JSON only to stdout. Progress uses a separate
+`{ id, event: "progress", data }` envelope; every request still receives exactly
+one terminal success or error envelope. Diagnostics go to stderr. `terminate` or
+stdin EOF closes the Stagehand session.
+
+Production resources include the complete `sidecar/stagehand` directory but not
+`sidecar/test`. The legacy Playwright dispatcher and credential-login helpers are
+compatibility-only and must remain until the Task 10 parity and migration gates
+prove that all production browser execution uses this worker.
+
+Worker requests never accept credential, password, token, OTP, or secret fields
+or values. Login remains a separate Rust-owned compatibility flow. Deterministic
+steps use Stagehand v3 Page/Locator APIs; semantic `observe`, single-boundary
+`act`, and bounded `agent` are used only by their explicit protocol commands.
+
 Sidecar 是 LogicGuard AI 的 Node.js 浏览器自动化子进程，由 Tauri Rust 后端调用，负责连接 Chrome/Edge 的 CDP、执行 Playwright 操作，并在需要时调用 Stagehand/Agent 能力。
 
 安装版会内置 Node Runtime、sidecar 脚本和生产依赖。最终用户不需要安装 Node.js，也不需要进入本目录执行 `npm install`。

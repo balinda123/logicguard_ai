@@ -26,6 +26,7 @@ const {
   loginWithCredentials,
   parseBrowserLoginPayload,
   safeScreenshotPath,
+  stagehandWorkerPath,
 } = require('./session');
 
 // 全局共享 page 引用，用于在进程退出时清理虚拟光标
@@ -263,6 +264,14 @@ async function cleanupVirtualCursor(page) {
 async function main() {
   // process.argv = ['node', 'index.js', 'command', '--arg1=val1', ...]
   const [, , command, ...rest] = process.argv;
+
+  // Compatibility-only dispatcher: production run execution moves to this
+  // persistent worker entry. Remove legacy commands only after Task 10 parity.
+  if (command === 'stagehand-worker') {
+    await require(stagehandWorkerPath).main();
+    return;
+  }
+
   const args = parseArgs(rest);
   const cdpPort = args.port || '9222';
 

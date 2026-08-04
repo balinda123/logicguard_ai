@@ -1,5 +1,9 @@
 const path = require('node:path');
 
+// Compatibility-only Playwright helpers. Delete after Task 10 parity and
+// migration gates prove every production browser path uses stagehand/worker.js.
+const stagehandWorkerPath = path.join(__dirname, 'stagehand', 'worker.js');
+
 function requiredString(value, field) {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new Error(`INVALID_${field}`);
@@ -85,4 +89,5 @@ module.exports = {
   loginWithCredentials,
   parseBrowserLoginPayload,
   safeScreenshotPath,
+  stagehandWorkerPath,
 };
