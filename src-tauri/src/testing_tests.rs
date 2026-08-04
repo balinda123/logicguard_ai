@@ -1,8 +1,9 @@
 use crate::testing::{
-    self, AppendWorkflowRunEventInput, CreateTestAccountInput, CreateWorkflowRunInput,
-    LoginAutomationConfig, SaveAccountCombinationInput, SaveDefectDraftInput,
-    SaveFailureEvidenceInput, SaveWorkflowScenarioInput, UpdateTestAccountInput,
-    UpdateWorkflowRunInput,
+    self, AppendWorkflowRunEventInput, CreateScopedTestAccountInput, CreateScopedWorkflowRunInput,
+    CreateTestAccountInput, CreateWorkflowRunInput, LoginAutomationConfig,
+    SaveAccountCombinationInput, SaveDefectDraftInput, SaveFailureEvidenceInput,
+    SaveScopedAccountCombinationInput, SaveScopedWorkflowScenarioInput, SaveWorkflowScenarioInput,
+    ScopeRef, UpdateTestAccountInput, UpdateWorkflowRunInput,
 };
 use rusqlite::Connection;
 
@@ -18,7 +19,326 @@ fn connection() -> Connection {
     )
     .unwrap();
     testing::initialize_schema(&conn).unwrap();
+    crate::test_design::initialize_schema(&conn).unwrap();
     conn
+}
+
+fn scoped_design(
+    conn: &mut Connection,
+    owner_id: &str,
+    system_name: &str,
+) -> (ScopeRef, String, String) {
+    let system = crate::test_design::create_system_record(conn, "admin", system_name).unwrap();
+    let environment = crate::test_design::create_environment_record(
+        conn,
+        "admin",
+        &crate::test_design::CreateEnvironmentInput {
+            system_id: system.id.clone(),
+            kind: "test".to_string(),
+            name: format!("{system_name} test"),
+            base_url: format!(
+                "https://{}.example.test",
+                system_name.to_lowercase().replace(' ', "-")
+            ),
+        },
+    )
+    .unwrap();
+    let design = crate::test_design::create_test_design_record(
+        conn,
+        owner_id,
+        &crate::test_design::CreateTestDesignInput {
+            system_id: system.id.clone(),
+            environment_id: environment.id.clone(),
+            title: format!("{system_name} design"),
+            status: "draft".to_string(),
+        },
+    )
+    .unwrap();
+    let requirement = crate::test_design::create_requirement_version_record(
+        conn,
+        owner_id,
+        &crate::test_design::CreateRequirementVersionInput {
+            design_id: design.id.clone(),
+            source_kind: "manual".to_string(),
+            content: "approved requirement".to_string(),
+        },
+    )
+    .unwrap();
+    (
+        ScopeRef {
+            system_id: system.id,
+            environment_id: environment.id,
+        },
+        design.id,
+        requirement.id,
+    )
+}
+
+#[test]
+fn upgrades_existing_testing_schema_idempotently_with_explicit_legacy_scope() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE users (id TEXT PRIMARY KEY);
+         INSERT INTO users(id) VALUES ('owner-a');
+         CREATE TABLE test_accounts (id TEXT PRIMARY KEY, display_name TEXT NOT NULL, business_role TEXT NOT NULL, masked_login_name TEXT NOT NULL, credential_ref TEXT NOT NULL, login_mode TEXT NOT NULL, login_config_json TEXT NOT NULL, is_enabled INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE TABLE account_combinations (id TEXT PRIMARY KEY, name TEXT NOT NULL, employee_account_id TEXT, manager_account_id TEXT, hrbp_account_id TEXT, owner_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE TABLE workflow_scenarios (id TEXT PRIMARY KEY, name TEXT NOT NULL, scenario_kind TEXT NOT NULL, source_test_case_id TEXT, business_tags_json TEXT NOT NULL, preconditions_json TEXT NOT NULL, steps_json TEXT NOT NULL, owner_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE TABLE workflow_runs (id TEXT PRIMARY KEY, scenario_id TEXT NOT NULL, account_combination_id TEXT, status TEXT NOT NULL, current_step_order INTEGER NOT NULL, owner_id TEXT NOT NULL, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE TABLE failure_evidence (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, step_id TEXT NOT NULL, expected_value TEXT NOT NULL, actual_value TEXT NOT NULL, screenshot_path TEXT, owner_id TEXT NOT NULL, created_at TEXT NOT NULL);
+         CREATE TABLE defect_drafts (id TEXT PRIMARY KEY, scenario_id TEXT NOT NULL, run_id TEXT NOT NULL, evidence_id TEXT, status TEXT NOT NULL, title TEXT NOT NULL, reproduction_steps_json TEXT NOT NULL, expected_result TEXT NOT NULL, actual_result TEXT NOT NULL, impact_summary TEXT NOT NULL, business_role TEXT, owner_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);"
+    ).unwrap();
+
+    testing::initialize_schema(&conn).unwrap();
+    testing::initialize_schema(&conn).unwrap();
+
+    for table in [
+        "test_accounts",
+        "account_combinations",
+        "workflow_scenarios",
+        "workflow_runs",
+        "failure_evidence",
+        "defect_drafts",
+    ] {
+        let columns: Vec<String> = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            columns.contains(&"system_id".to_string()),
+            "{table} missing system_id"
+        );
+        assert!(
+            columns.contains(&"environment_id".to_string()),
+            "{table} missing environment_id"
+        );
+        assert!(
+            columns.contains(&"scope_state".to_string()),
+            "{table} missing scope_state"
+        );
+    }
+    let run_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(workflow_runs)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for column in ["design_id", "requirement_version_id", "snapshot_json"] {
+        assert!(
+            run_columns.contains(&column.to_string()),
+            "workflow_runs missing {column}"
+        );
+    }
+}
+
+#[test]
+fn scoped_run_rejects_cross_environment_and_freezes_snapshot() {
+    let mut conn = connection();
+    let (scope_a, design_id, requirement_version_id) =
+        scoped_design(&mut conn, "owner-a", "Payroll");
+    let (scope_b, _, _) = scoped_design(&mut conn, "owner-a", "Recruiting");
+    let account = testing::create_scoped_test_account_record(
+        &conn,
+        "admin",
+        "owner-a",
+        &CreateScopedTestAccountInput {
+            scope: scope_a.clone(),
+            account: account_input("employee"),
+        },
+    )
+    .unwrap();
+    let combination = testing::save_scoped_account_combination_record(
+        &conn,
+        "owner-a",
+        &SaveScopedAccountCombinationInput {
+            scope: scope_a.clone(),
+            combination: SaveAccountCombinationInput {
+                id: None,
+                name: "Payroll employee".into(),
+                employee_account_id: Some(account.id),
+                manager_account_id: None,
+                hrbp_account_id: None,
+            },
+        },
+    )
+    .unwrap();
+    let scenario = testing::save_scoped_workflow_scenario_record(
+        &conn,
+        "owner-a",
+        &SaveScopedWorkflowScenarioInput {
+            scope: scope_a.clone(),
+            scenario: SaveWorkflowScenarioInput {
+                id: None,
+                name: "Submit payroll".into(),
+                scenario_kind: "single_role".into(),
+                source_test_case_id: Some("case-payroll".into()),
+                business_tags_json: "[]".into(),
+                preconditions_json: "[]".into(),
+                steps_json: r#"[{"id":"step-payroll","role":"employee","intent":"submit"}]"#.into(),
+            },
+        },
+    )
+    .unwrap();
+    let cross = testing::create_scoped_workflow_run_record(
+        &mut conn,
+        "owner-a",
+        &CreateScopedWorkflowRunInput {
+            scope: scope_b,
+            design_id: design_id.clone(),
+            requirement_version_id: requirement_version_id.clone(),
+            scenario_id: scenario.id.clone(),
+            account_combination_id: Some(combination.id.clone()),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(cross, "CROSS_ENVIRONMENT_REFERENCE");
+
+    let run = testing::create_scoped_workflow_run_record(
+        &mut conn,
+        "owner-a",
+        &CreateScopedWorkflowRunInput {
+            scope: scope_a,
+            design_id,
+            requirement_version_id,
+            scenario_id: scenario.id.clone(),
+            account_combination_id: Some(combination.id.clone()),
+        },
+    )
+    .unwrap();
+    assert_eq!(run.scope_state, "scoped");
+    assert_eq!(run.snapshot.scenario.name, "Submit payroll");
+    assert_eq!(run.snapshot.case_ids, vec!["case-payroll"]);
+
+    conn.execute(
+        "UPDATE workflow_scenarios SET name='Edited scenario', steps_json='[]' WHERE id=?1",
+        [&scenario.id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE account_combinations SET name='Edited combination' WHERE id=?1",
+        [&combination.id],
+    )
+    .unwrap();
+    let updated = testing::update_workflow_run_record(
+        &conn,
+        "owner-a",
+        &UpdateWorkflowRunInput {
+            id: run.id.clone(),
+            status: "running".into(),
+            current_step_order: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(updated.snapshot, run.snapshot);
+    assert_eq!(updated.snapshot.scenario.name, "Submit payroll");
+    assert_eq!(
+        updated.snapshot.combination.unwrap().name,
+        "Payroll employee"
+    );
+
+    let evidence = testing::save_failure_evidence_record(
+        &conn,
+        "owner-a",
+        &SaveFailureEvidenceInput {
+            id: None,
+            run_id: run.id.clone(),
+            step_id: "step-payroll".into(),
+            expected_value: "accepted".into(),
+            actual_value: "rejected".into(),
+            screenshot_path: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(evidence.system_id, run.system_id);
+    assert_eq!(evidence.environment_id, run.environment_id);
+    assert_eq!(evidence.scope_state, "scoped");
+
+    let defect =
+        testing::save_defect_draft_record(&conn, "owner-a", &defect_input(scenario.id, run.id))
+            .unwrap();
+    assert_eq!(defect.system_id, run.system_id);
+    assert_eq!(defect.environment_id, run.environment_id);
+    assert_eq!(defect.scope_state, "scoped");
+}
+
+#[test]
+fn scoped_resources_reject_cross_owner_and_cross_scope_account_references() {
+    let mut conn = connection();
+    let (scope_a, design_id, requirement_version_id) =
+        scoped_design(&mut conn, "owner-a", "Benefits");
+    let (scope_b, _, _) = scoped_design(&mut conn, "owner-a", "Learning");
+    let account = testing::create_scoped_test_account_record(
+        &conn,
+        "admin",
+        "owner-a",
+        &CreateScopedTestAccountInput {
+            scope: scope_a.clone(),
+            account: account_input("employee"),
+        },
+    )
+    .unwrap();
+    let error = testing::save_scoped_account_combination_record(
+        &conn,
+        "owner-a",
+        &SaveScopedAccountCombinationInput {
+            scope: scope_b,
+            combination: SaveAccountCombinationInput {
+                id: None,
+                name: "invalid".into(),
+                employee_account_id: Some(account.id),
+                manager_account_id: None,
+                hrbp_account_id: None,
+            },
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error, "CROSS_ENVIRONMENT_REFERENCE");
+
+    let scenario = testing::save_scoped_workflow_scenario_record(
+        &conn,
+        "owner-a",
+        &SaveScopedWorkflowScenarioInput {
+            scope: scope_a.clone(),
+            scenario: SaveWorkflowScenarioInput {
+                id: None,
+                name: "Benefits".into(),
+                scenario_kind: "single_role".into(),
+                source_test_case_id: None,
+                business_tags_json: "[]".into(),
+                preconditions_json: "[]".into(),
+                steps_json: "[]".into(),
+            },
+        },
+    )
+    .unwrap();
+    let legacy_run_error = testing::create_workflow_run_record(
+        &conn,
+        "owner-a",
+        &CreateWorkflowRunInput {
+            scenario_id: scenario.id.clone(),
+            account_combination_id: None,
+            status: "queued".into(),
+            current_step_order: 0,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(legacy_run_error, "SCOPED_API_REQUIRED");
+    let error = testing::create_scoped_workflow_run_record(
+        &mut conn,
+        "owner-b",
+        &CreateScopedWorkflowRunInput {
+            scope: scope_a,
+            design_id,
+            requirement_version_id,
+            scenario_id: scenario.id,
+            account_combination_id: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error, "NOT_FOUND");
 }
 
 fn account_input(business_role: &str) -> CreateTestAccountInput {

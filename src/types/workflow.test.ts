@@ -12,9 +12,20 @@ import {
   type WorkflowRun,
   type WorkflowRunEvent,
   type WorkflowScenario,
+  type ScopeRef,
+  type WorkflowRunSnapshot,
 } from './workflow'
 
 describe('workflow domain rules', () => {
+  it('models scoped resources and immutable run snapshots', () => {
+    const scope = { systemId: 'system-1', environmentId: 'environment-1' } satisfies ScopeRef
+    const snapshot = {
+      scenario: { id: 'scenario-1', name: 'Approval', scenarioKind: 'workflow', steps: [], sourceTestCaseId: 'case-1' },
+      combination: { id: 'combination-1', name: 'Employee and manager', accounts: [] },
+      caseIds: ['case-1'],
+    } satisfies WorkflowRunSnapshot
+    expect({ scope, snapshot }).toEqual({ scope, snapshot })
+  })
   it('creates defect drafts only after a business assertion failure', () => {
     expect(canCreateDefectDraft('business_failed')).toBe(true)
     expect(canCreateDefectDraft('queued')).toBe(false)

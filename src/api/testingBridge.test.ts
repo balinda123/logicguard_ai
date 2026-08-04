@@ -5,6 +5,7 @@ import {
   captureFailureScreenshot,
   clearBrowserSession,
   createTestAccount,
+  createScopedWorkflowRun,
   loginTestAccount,
   listTestAccounts,
   saveWorkflowScenario,
@@ -20,6 +21,20 @@ afterEach(() => {
 })
 
 describe('testingBridge', () => {
+  it('maps scoped workflow run identity and immutable snapshot with camelCase payloads', async () => {
+    invokeMock.mockResolvedValueOnce({
+      id: 'run-1', scenarioId: 'scenario-1', accountCombinationId: 'combination-1', status: 'queued', currentStepOrder: 0,
+      systemId: 'system-1', environmentId: 'environment-1', designId: 'design-1', requirementVersionId: 'requirement-1', scopeState: 'scoped',
+      snapshot: { scenario: { id: 'scenario-1', name: 'Approval', scenarioKind: 'workflow', steps: [], sourceTestCaseId: 'case-1' }, combination: { id: 'combination-1', name: 'Default', accounts: [] }, caseIds: ['case-1'] },
+      createdAt: '2026-08-04T00:00:00Z', updatedAt: '2026-08-04T00:00:00Z',
+    })
+    await expect(createScopedWorkflowRun({
+      systemId: 'system-1', environmentId: 'environment-1', designId: 'design-1', requirementVersionId: 'requirement-1', scenarioId: 'scenario-1', accountCombinationId: 'combination-1',
+    })).resolves.toMatchObject({ systemId: 'system-1', environmentId: 'environment-1', snapshot: { caseIds: ['case-1'] } })
+    expect(invokeMock).toHaveBeenCalledWith('create_scoped_workflow_run', { input: {
+      scope: { systemId: 'system-1', environmentId: 'environment-1' }, designId: 'design-1', requirementVersionId: 'requirement-1', scenarioId: 'scenario-1', accountCombinationId: 'combination-1',
+    } })
+  })
   it('maps account records to the workflow domain type without exposing credentials', async () => {
     invokeMock.mockResolvedValueOnce([
       {

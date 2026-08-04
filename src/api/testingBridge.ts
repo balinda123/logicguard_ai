@@ -9,9 +9,11 @@ import type {
   FailureEvidence,
   LoginAutomationConfig,
   RunStatus,
+  ScopeRef,
   ScenarioKind,
   TestAccount,
   WorkflowRun,
+  WorkflowRunSnapshot,
   WorkflowRunEvent,
   WorkflowScenario,
   WorkflowScenarioStep,
@@ -26,6 +28,9 @@ interface RustTestAccount {
   loginMode: TestAccount['loginMode']
   loginConfig: LoginAutomationConfig
   isEnabled: boolean
+  systemId?: string
+  environmentId?: string
+  scopeState?: TestAccount['scopeState']
   createdAt: string
   updatedAt: string
 }
@@ -38,6 +43,9 @@ interface RustWorkflowScenario {
   businessTagsJson: string
   preconditionsJson: string
   stepsJson: string
+  systemId?: string
+  environmentId?: string
+  scopeState?: WorkflowScenario['scopeState']
   createdAt: string
   updatedAt: string
 }
@@ -48,6 +56,12 @@ interface RustWorkflowRun {
   accountCombinationId?: string
   status: RunStatus
   currentStepOrder: number
+  systemId?: string
+  environmentId?: string
+  designId?: string
+  requirementVersionId?: string
+  scopeState?: WorkflowRun['scopeState']
+  snapshot?: WorkflowRunSnapshot
   startedAt?: string
   finishedAt?: string
   createdAt: string
@@ -68,9 +82,12 @@ interface RustFailureEvidence {
   id: string
   runId: string
   stepId: string
-  expected: string
-  actual: string
+  expectedValue: string
+  actualValue: string
   screenshotPath?: string
+  systemId?: string
+  environmentId?: string
+  scopeState?: FailureEvidence['scopeState']
   createdAt: string
   updatedAt: string
 }
@@ -87,6 +104,9 @@ interface RustDefectDraft {
   scenarioId: string
   runId: string
   evidenceId?: string
+  systemId?: string
+  environmentId?: string
+  scopeState?: DefectDraft['scopeState']
   createdAt: string
   updatedAt: string
 }
@@ -111,6 +131,17 @@ export interface WorkflowRunInput {
   accountCombinationId?: string
   status: RunStatus
   currentStepIndex: number
+}
+
+export interface ScopedTestAccountInput extends TestAccountInput, ScopeRef {}
+export interface ScopedAccountCombinationInput extends AccountCombinationInput, ScopeRef {}
+export interface ScopedWorkflowScenarioInput extends ScopeRef { scenario: WorkflowScenario }
+
+export interface ScopedWorkflowRunInput extends ScopeRef {
+  designId: string
+  requirementVersionId: string
+  scenarioId: string
+  accountCombinationId?: string
 }
 
 export interface WorkflowRunEventInput {
@@ -183,6 +214,9 @@ function mapTestAccount(account: RustTestAccount): TestAccount {
     credentialRef: account.credentialRef,
     loginMode: account.loginMode,
     enabled: account.isEnabled,
+    systemId: account.systemId,
+    environmentId: account.environmentId,
+    scopeState: account.scopeState,
     loginConfig: account.loginConfig,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
@@ -198,6 +232,9 @@ function mapScenario(scenario: RustWorkflowScenario): WorkflowScenario {
     businessTags: parseStringList(scenario.businessTagsJson),
     preconditions: parseStringList(scenario.preconditionsJson),
     steps: parseSteps(scenario.stepsJson),
+    systemId: scenario.systemId,
+    environmentId: scenario.environmentId,
+    scopeState: scenario.scopeState,
     createdAt: scenario.createdAt,
     updatedAt: scenario.updatedAt,
   }
@@ -210,6 +247,12 @@ function mapRun(run: RustWorkflowRun): WorkflowRun {
     accountCombinationId: run.accountCombinationId,
     status: run.status,
     currentStepIndex: run.currentStepOrder,
+    systemId: run.systemId,
+    environmentId: run.environmentId,
+    designId: run.designId,
+    requirementVersionId: run.requirementVersionId,
+    scopeState: run.scopeState,
+    snapshot: run.snapshot,
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
     createdAt: run.createdAt,
@@ -230,7 +273,19 @@ function mapEvent(event: RustWorkflowRunEvent): WorkflowRunEvent {
 }
 
 function mapEvidence(evidence: RustFailureEvidence): FailureEvidence {
-  return evidence
+  return {
+    id: evidence.id,
+    runId: evidence.runId,
+    stepId: evidence.stepId,
+    expected: evidence.expectedValue,
+    actual: evidence.actualValue,
+    screenshotPath: evidence.screenshotPath,
+    systemId: evidence.systemId,
+    environmentId: evidence.environmentId,
+    scopeState: evidence.scopeState,
+    createdAt: evidence.createdAt,
+    updatedAt: evidence.updatedAt,
+  }
 }
 
 function mapDefect(draft: RustDefectDraft): DefectDraft {
@@ -246,6 +301,9 @@ function mapDefect(draft: RustDefectDraft): DefectDraft {
     scenarioId: draft.scenarioId,
     runId: draft.runId,
     evidenceId: draft.evidenceId,
+    systemId: draft.systemId,
+    environmentId: draft.environmentId,
+    scopeState: draft.scopeState,
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,
   }
@@ -263,6 +321,16 @@ export async function createTestAccount(input: TestAccountInput): Promise<TestAc
       businessRole: input.role,
       loginMode: input.loginMode,
       loginConfig: input.loginConfig,
+    },
+  })
+  return mapTestAccount(account)
+}
+
+export async function createScopedTestAccount(input: ScopedTestAccountInput): Promise<TestAccount> {
+  const account = await invoke<RustTestAccount>('create_scoped_test_account', {
+    input: {
+      scope: { systemId: input.systemId, environmentId: input.environmentId },
+      account: { displayName: input.displayName, businessRole: input.role, loginMode: input.loginMode, loginConfig: input.loginConfig },
     },
   })
   return mapTestAccount(account)
@@ -298,6 +366,13 @@ export async function saveAccountCombination(input: AccountCombinationInput): Pr
   return await invoke<AccountCombination>('save_account_combination', { input })
 }
 
+export async function saveScopedAccountCombination(input: ScopedAccountCombinationInput): Promise<AccountCombination> {
+  const { systemId, environmentId, ...combination } = input
+  return await invoke<AccountCombination>('save_scoped_account_combination', {
+    input: { scope: { systemId, environmentId }, combination },
+  })
+}
+
 export async function deleteAccountCombination(id: string): Promise<void> {
   await invoke('delete_account_combination', { id })
 }
@@ -322,6 +397,25 @@ export async function saveWorkflowScenario(scenario: WorkflowScenario): Promise<
   return mapScenario(result)
 }
 
+export async function saveScopedWorkflowScenario(input: ScopedWorkflowScenarioInput): Promise<WorkflowScenario> {
+  const scenario = input.scenario
+  const result = await invoke<RustWorkflowScenario>('save_scoped_workflow_scenario', {
+    input: {
+      scope: { systemId: input.systemId, environmentId: input.environmentId },
+      scenario: {
+        id: scenario.id || null,
+        name: scenario.title,
+        scenarioKind: scenario.scenarioKind,
+        sourceTestCaseId: scenario.sourceTestCaseId || null,
+        businessTagsJson: JSON.stringify(scenario.businessTags),
+        preconditionsJson: JSON.stringify(scenario.preconditions),
+        stepsJson: JSON.stringify(scenario.steps),
+      },
+    },
+  })
+  return mapScenario(result)
+}
+
 export async function deleteWorkflowScenario(id: string): Promise<void> {
   await invoke('delete_workflow_scenario', { id })
 }
@@ -333,6 +427,20 @@ export async function createWorkflowRun(input: WorkflowRunInput): Promise<Workfl
       accountCombinationId: input.accountCombinationId ?? null,
       status: input.status,
       currentStepOrder: input.currentStepIndex,
+    },
+  })
+  return mapRun(run)
+}
+
+/** Scope-aware entry point. Legacy createWorkflowRun remains until Task 9 migration completes. */
+export async function createScopedWorkflowRun(input: ScopedWorkflowRunInput): Promise<WorkflowRun> {
+  const run = await invoke<RustWorkflowRun>('create_scoped_workflow_run', {
+    input: {
+      scope: { systemId: input.systemId, environmentId: input.environmentId },
+      designId: input.designId,
+      requirementVersionId: input.requirementVersionId,
+      scenarioId: input.scenarioId,
+      accountCombinationId: input.accountCombinationId ?? null,
     },
   })
   return mapRun(run)

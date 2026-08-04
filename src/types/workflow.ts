@@ -20,6 +20,41 @@ export type DefectStatus =
   | 'closed'
   | 'not_a_bug'
 
+export interface ScopeRef {
+  systemId: string
+  environmentId: string
+}
+
+export type ScopeState = 'scoped' | 'legacy'
+
+export interface WorkflowRunSnapshotAccount {
+  readonly id: string
+  readonly role: BusinessRole
+  readonly displayName: string
+}
+
+export interface WorkflowRunSnapshot {
+  readonly scenario: {
+    readonly id: string
+    readonly name: string
+    readonly scenarioKind: ScenarioKind
+    readonly sourceTestCaseId?: string
+    readonly steps: readonly WorkflowScenarioStep[]
+  }
+  readonly combination?: {
+    readonly id: string
+    readonly name: string
+    readonly accounts: readonly WorkflowRunSnapshotAccount[]
+  }
+  readonly caseIds: readonly string[]
+}
+
+interface ScopedRecord {
+  systemId?: string
+  environmentId?: string
+  scopeState?: ScopeState
+}
+
 export interface WorkflowScenarioStep {
   id: string
   order: number
@@ -33,7 +68,7 @@ export interface WorkflowScenarioStep {
   updatedAt: string
 }
 
-export interface WorkflowScenario {
+export interface WorkflowScenario extends ScopedRecord {
   id: string
   sourceTestCaseId: string
   title: string
@@ -55,7 +90,7 @@ export interface LoginAutomationConfig {
   successSelector?: string
 }
 
-export interface TestAccount {
+export interface TestAccount extends ScopedRecord {
   id: string
   role: BusinessRole
   displayName: string
@@ -68,7 +103,7 @@ export interface TestAccount {
   updatedAt: string
 }
 
-export interface AccountCombination {
+export interface AccountCombination extends ScopedRecord {
   id: string
   name: string
   employeeAccountId?: string
@@ -78,12 +113,15 @@ export interface AccountCombination {
   updatedAt: string
 }
 
-export interface WorkflowRun {
+export interface WorkflowRun extends ScopedRecord {
   id: string
   scenarioId: string
   accountCombinationId?: string
   status: RunStatus
   currentStepIndex: number
+  designId?: string
+  requirementVersionId?: string
+  snapshot?: WorkflowRunSnapshot
   startedAt?: string
   finishedAt?: string
   createdAt: string
@@ -100,7 +138,7 @@ export interface WorkflowRunEvent {
   occurredAt: string
 }
 
-export interface FailureEvidence {
+export interface FailureEvidence extends ScopedRecord {
   id: string
   runId: string
   stepId: string
@@ -111,7 +149,7 @@ export interface FailureEvidence {
   updatedAt: string
 }
 
-export interface DefectDraft {
+export interface DefectDraft extends ScopedRecord {
   id: string
   status: DefectStatus
   title: string
