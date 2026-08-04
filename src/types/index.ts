@@ -225,3 +225,14 @@ export type {
   UpdateTestDesignInput,
   UpdateTestSystemInput,
 } from './testDesign'
+
+export type {
+  ExecutionErrorCategory,
+  ExecutionPlan,
+  ExecutionRun,
+  ExecutionRunEvent,
+  ExecutionRunStatus,
+  RunEventPayload,
+  RunUpdatedEvent,
+  StartRunInput,
+} from './execution'

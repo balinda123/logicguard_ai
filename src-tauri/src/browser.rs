@@ -114,7 +114,7 @@ struct SidecarResponse<T> {
 
 use crate::llm::LlmConfig;
 
-fn runtime_assets() -> Result<(PathBuf, PathBuf), String> {
+pub(crate) fn runtime_assets() -> Result<(PathBuf, PathBuf), String> {
     let node_name = if cfg!(target_os = "windows") { "node.exe" } else { "node" };
     let exe = std::env::current_exe().map_err(|e| format!("无法获取程序路径: {}", e))?;
     let exe_dir = exe.parent().ok_or_else(|| "无法获取程序目录".to_string())?;

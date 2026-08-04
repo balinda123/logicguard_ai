@@ -2,6 +2,7 @@ mod auth;
 mod browser;
 mod llm;
 mod reports;
+mod run_manager;
 mod storage;
 mod test_design;
 mod testing;
@@ -12,10 +13,20 @@ mod test_design_tests;
 #[cfg(test)]
 mod testing_tests;
 
+#[cfg(test)]
+mod run_manager_tests;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            use tauri::Manager;
+            let app_data_dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&app_data_dir)?;
+            app.manage(run_manager::RunManager::new(
+                app.handle().clone(),
+                app_data_dir.join("logicguard.db"),
+            ).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?);
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -83,6 +94,14 @@ pub fn run() {
             testing::save_defect_draft,
             testing::list_defect_drafts,
             testing::update_defect_draft_status,
+            run_manager::start_run,
+            run_manager::pause_run,
+            run_manager::resume_run,
+            run_manager::terminate_run,
+            run_manager::get_run,
+            run_manager::list_runs,
+            run_manager::list_active_runs,
+            run_manager::list_run_events,
             storage::get_storage_locations,
             storage::open_app_data_dir,
             // LLM 大模型相关命令

@@ -15,6 +15,19 @@ per stdin line, and writes protocol JSON only to stdout. Progress uses a separat
 one terminal success or error envelope. Diagnostics go to stderr. `terminate` or
 stdin EOF closes the Stagehand session.
 
+`src-tauri/src/run_manager.rs` owns the durable lifecycle. It starts this worker
+once for the active run, sends one validated execution-plan command at a time,
+persists progress and a checkpoint after each terminal response, and then either
+continues, pauses, or terminates the process. Only one run holds the browser
+lease; other runs remain queued. The worker does not own run state or SQLite.
+
+The run manager accepts no credential fields. It reads the current API key only
+inside the Rust worker adapter and injects it into the child environment; keys
+must never appear in plans, snapshots, events, stderr, or database columns.
+Worker stderr is bounded and sanitized before logging. HTML model responses,
+HTTP 429, timeouts, and connection failures are classified as technical blocks
+after bounded exponential retry; assertion failures are business failures.
+
 Production resources include the complete `sidecar/stagehand` directory but not
 `sidecar/test`. The legacy Playwright dispatcher and credential-login helpers are
 compatibility-only and must remain until the Task 10 parity and migration gates
