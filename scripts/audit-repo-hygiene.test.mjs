@@ -1,34 +1,39 @@
-import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
+import { expect, test } from 'vitest';
 
 import { classifyPath } from './audit-repo-hygiene.mjs';
 
-const auditScript = fileURLToPath(
-  new URL('./audit-repo-hygiene.mjs', import.meta.url),
-);
+const auditScript = resolve('scripts/audit-repo-hygiene.mjs');
 
 test('classifies generated repository paths', () => {
-  assert.equal(classifyPath('artifacts/runs/r1/trace.zip'), 'generated');
-  assert.equal(classifyPath('sidecar/.stagehand/profile/Preferences'), 'generated');
-  assert.equal(classifyPath('src-tauri/runtime/chromium/chrome.exe'), 'generated');
-  assert.equal(classifyPath('migration-backups/backup.json'), 'generated');
-  assert.equal(classifyPath('coverage/unit/index.html'), 'generated');
+  expect(classifyPath('artifacts/runs/r1/trace.zip')).toBe('generated');
+  expect(classifyPath('sidecar/.stagehand/profile/Preferences')).toBe('generated');
+  expect(classifyPath('src-tauri/runtime/chromium/chrome.exe')).toBe('generated');
+  expect(classifyPath('migration-backups/backup.json')).toBe('generated');
+  expect(classifyPath('coverage/unit/index.html')).toBe('generated');
 });
 
 test('keeps tests and source files classified as source', () => {
-  assert.equal(classifyPath('src/pages/TestCases.test.tsx'), 'source');
-  assert.equal(classifyPath('src/agents/scriptExecutor.ts'), 'source');
-  assert.equal(classifyPath('artifacts/runs-old/trace.zip'), 'source');
-  assert.equal(classifyPath('coverage-report/index.html'), 'source');
+  expect(classifyPath('src/pages/TestCases.test.tsx')).toBe('source');
+  expect(classifyPath('src/agents/scriptExecutor.ts')).toBe('source');
+  expect(classifyPath('artifacts/runs-old/trace.zip')).toBe('source');
+  expect(classifyPath('coverage-report/index.html')).toBe('source');
 });
 
 test('normalizes Windows path separators', () => {
-  assert.equal(
-    classifyPath('sidecar\\.stagehand\\profile\\Preferences'),
+  expect(classifyPath('sidecar\\.stagehand\\profile\\Preferences')).toBe(
     'generated',
   );
+});
+
+test('normalizes repository-relative path forms', () => {
+  const absoluteCoveragePath = resolve('coverage/unit/index.html');
+
+  expect(classifyPath('./coverage')).toBe('generated');
+  expect(classifyPath('.\\coverage')).toBe('generated');
+  expect(classifyPath(absoluteCoveragePath)).toBe('generated');
+  expect(classifyPath('../coverage')).toBe('source');
 });
 
 test('CLI lists generated paths and exits with status 1', () => {
@@ -43,10 +48,10 @@ test('CLI lists generated paths and exits with status 1', () => {
     { encoding: 'utf8' },
   );
 
-  assert.equal(result.status, 1);
-  assert.match(result.stdout, /coverage\/unit\/index\.html/);
-  assert.match(result.stdout, /sidecar\\\.stagehand\\profile\\Preferences/);
-  assert.doesNotMatch(result.stdout, /TestCases\.test\.tsx/);
+  expect(result.status).toBe(1);
+  expect(result.stdout).toMatch(/coverage\/unit\/index\.html/);
+  expect(result.stdout).toMatch(/sidecar\\\.stagehand\\profile\\Preferences/);
+  expect(result.stdout).not.toMatch(/TestCases\.test\.tsx/);
 });
 
 test('CLI accepts source paths without findings', () => {
@@ -56,6 +61,6 @@ test('CLI accepts source paths without findings', () => {
     { encoding: 'utf8' },
   );
 
-  assert.equal(result.status, 0);
-  assert.equal(result.stdout, '');
+  expect(result.status).toBe(0);
+  expect(result.stdout).toBe('');
 });

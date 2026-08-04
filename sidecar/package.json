@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.110",

@@ -1,3 +1,4 @@
+import { isAbsolute, normalize, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const GENERATED_PREFIXES = [
@@ -9,9 +10,17 @@ const GENERATED_PREFIXES = [
 ];
 
 export function classifyPath(filePath) {
-  const normalizedPath = filePath.replaceAll('\\', '/');
+  const platformPath = normalize(filePath.replace(/[\\/]+/g, sep));
+  const repositoryPath = isAbsolute(platformPath)
+    ? relative(process.cwd(), platformPath)
+    : platformPath;
+  const normalizedPath = repositoryPath.split(sep).join('/');
 
-  return GENERATED_PREFIXES.some((prefix) => normalizedPath.startsWith(prefix))
+  return GENERATED_PREFIXES.some(
+    (prefix) =>
+      normalizedPath === prefix.slice(0, -1) ||
+      normalizedPath.startsWith(prefix),
+  )
     ? 'generated'
     : 'source';
 }
