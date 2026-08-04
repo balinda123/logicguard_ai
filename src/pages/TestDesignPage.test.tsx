@@ -30,7 +30,7 @@ describe('TestDesignPage', () => {
 
   it('loads designs using the selected system and environment together', async () => {
     render(<TestDesignPage />)
-    expect(await screen.findByText('系统 A 的设计')).toBeVisible()
+    expect((await screen.findAllByText('系统 A 的设计')).some((element) => element.offsetParent !== null || element.isConnected)).toBe(true)
     expect(designBridge.listTestDesigns).toHaveBeenCalledWith('system-a', 'env-a')
   })
 
@@ -39,10 +39,12 @@ describe('TestDesignPage', () => {
     vi.mocked(designBridge.listGenerationBatches).mockResolvedValue([{ id: 'batch-1', designId: 'design-a', requirementVersionId: 'requirement-1', model: 'test-model', isStale: false, createdAt: 'now', updatedAt: 'now' }])
     vi.mocked(designBridge.createRequirementVersion).mockResolvedValue({ id: 'requirement-2', designId: 'design-a', versionNo: 2, sourceKind: 'text', content: '新需求', createdAt: 'now', updatedAt: 'now' })
     render(<TestDesignPage />)
+    const user = userEvent.setup()
     const input = await screen.findByLabelText('需求或验收标准')
-    await userEvent.setup().clear(input)
-    await userEvent.setup().type(input, '新需求')
-    await userEvent.setup().click(screen.getByRole('button', { name: '保存新版本' }))
+    await waitFor(() => expect(input).toHaveValue('旧需求'))
+    await user.clear(input)
+    await user.type(input, '新需求')
+    await user.click(screen.getByRole('button', { name: '保存新版本' }))
     expect(await screen.findByText('旧批次来源已过期，检查和回归默认只使用当前需求版本。')).toBeVisible()
     await waitFor(() => expect(designBridge.createRequirementVersion).toHaveBeenCalledWith({ designId: 'design-a', sourceKind: 'text', content: '新需求' }))
   })

@@ -144,10 +144,12 @@ impl<A: WindowAdapter> InteractionGuard for PidWindowGuard<A> {
 mod platform {
     use super::{PidWindowGuard, WindowAdapter, WindowHandle, LOCK_UNAVAILABLE};
     use std::sync::Arc;
-    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnableWindow, EnumWindows, GetWindowThreadProcessId, IsWindow, IsWindowEnabled,
-        IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        EnumWindows, GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetForegroundWindow,
+        ShowWindow, SW_RESTORE,
     };
 
     #[derive(Clone, Copy)]

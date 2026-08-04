@@ -40,6 +40,7 @@ describe('testDesignBridge', () => {
         return { ...record, currentRequirementVersionId: null }
       }
       if (command === 'create_generation_batch') return { ...record, templateId: null }
+      if (command === 'save_generation_cases') return []
       if (command === 'update_design_case_status') return { ...record, generationBatchId: null, payload: {}, status: 'confirmed' }
       if (command === 'save_regression_config') {
         return { ...record, suiteId: null, accountCombinationId: null }

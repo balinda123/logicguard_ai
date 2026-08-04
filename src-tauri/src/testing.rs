@@ -1183,7 +1183,7 @@ pub(crate) fn load_automatic_login_for_snapshot(
         .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_UNAVAILABLE".to_string())?;
     let parsed = serde_json::from_str(&stored);
     stored.zeroize();
-    let payload: StoredCredentialPayload =
+    let mut payload: StoredCredentialPayload =
         parsed.map_err(|_| "TEST_ACCOUNT_CREDENTIAL_INVALID".to_string())?;
     validate_credential_value(&payload.username, "USERNAME")
         .map_err(|_| "TEST_ACCOUNT_CREDENTIAL_INVALID".to_string())?;
@@ -1192,8 +1192,8 @@ pub(crate) fn load_automatic_login_for_snapshot(
     Ok(AutomaticBrowserLogin {
         login_config: account.login_config,
         credential: StoredBrowserCredential {
-            username: payload.username,
-            password: payload.password,
+            username: std::mem::take(&mut payload.username),
+            password: std::mem::take(&mut payload.password),
         },
     })
 }

@@ -87,7 +87,7 @@ fn scoped_design(
 }
 
 fn scoped_steps_json() -> String {
-    r#"[{"id":"step-payroll","order":1,"role":"employee","actionIntent":"Submit payroll","assertions":["Payroll is accepted"],"pageUrl":"https://payroll.example.test","selector":"#submit","expectedValue":"accepted","createdAt":"2026-08-04T00:00:00Z","updatedAt":"2026-08-04T00:00:00Z"}]"#.to_string()
+    r##"[{"id":"step-payroll","order":1,"role":"employee","actionIntent":"Submit payroll","assertions":["Payroll is accepted"],"pageUrl":"https://payroll.example.test","selector":"#submit","expectedValue":"accepted","createdAt":"2026-08-04T00:00:00Z","updatedAt":"2026-08-04T00:00:00Z"}]"##.to_string()
 }
 
 #[test]

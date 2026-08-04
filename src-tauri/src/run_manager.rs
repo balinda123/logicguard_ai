@@ -511,3 +511,8 @@ fn marker_for_run(run:&ExecutionRun,current_step:i64)->Value{json!({"system":mar
 #[tauri::command] pub fn list_runs(manager:tauri::State<'_,RunManager>)->Result<Vec<ExecutionRun>,String>{list_run_records(&manager.db()?,&crate::auth::current_user_id()?,false)}
 #[tauri::command] pub fn list_active_runs(manager:tauri::State<'_,RunManager>)->Result<Vec<ExecutionRun>,String>{list_run_records(&manager.db()?,&crate::auth::current_user_id()?,true)}
 #[tauri::command] pub fn list_run_events(manager:tauri::State<'_,RunManager>,run_id:String,after_sequence:Option<i64>)->Result<Vec<ExecutionRunEvent>,String>{manager.owned(&run_id)?;events_after(&manager.db()?,&run_id,after_sequence.unwrap_or(0))}
+
+#[cfg(test)]
+mod tests {
+    include!("run_manager_tests.rs");
+}

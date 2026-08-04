@@ -15,9 +15,6 @@ mod test_design_tests;
 mod testing_tests;
 
 #[cfg(test)]
-mod run_manager_tests;
-
-#[cfg(test)]
 mod interaction_guard_tests;
 
 #[cfg(test)]
