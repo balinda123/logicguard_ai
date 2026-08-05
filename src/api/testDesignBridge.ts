@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 
 import type {
   CreateEnvironmentInput,
+  CreateSystemWithEnvironmentInput,
   DesignTestCaseRecord,
   CreateGenerationBatchInput,
   CreateRegressionConfigInput,
@@ -13,6 +14,7 @@ import type {
   RequirementVersion,
   ReviewRecord,
   SystemEnvironment,
+  SystemEnvironmentScope,
   TestDesign,
   TestSystem,
   UpdateEnvironmentInput,
@@ -68,6 +70,10 @@ export async function listSystems(): Promise<TestSystem[]> {
 
 export async function createSystem(name: string): Promise<TestSystem> {
   return invoke<TestSystem>('create_system', { name })
+}
+
+export async function createSystemWithEnvironment(input: CreateSystemWithEnvironmentInput): Promise<SystemEnvironmentScope> {
+  return invoke<SystemEnvironmentScope>('create_system_with_environment', { input })
 }
 
 export async function updateSystem(input: UpdateTestSystemInput): Promise<TestSystem> {

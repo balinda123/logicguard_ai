@@ -29,9 +29,10 @@ describe('TestDesignPage', () => {
   })
 
   it('loads designs using the selected system and environment together', async () => {
-    render(<TestDesignPage />)
+    render(<TestDesignPage canManageAccounts />)
     expect((await screen.findAllByText('系统 A 的设计')).some((element) => element.offsetParent !== null || element.isConnected)).toBe(true)
     expect(designBridge.listTestDesigns).toHaveBeenCalledWith('system-a', 'env-a')
+    expect(screen.getByRole('button', { name: '新建设计' })).toHaveTextContent('新建设计')
   })
 
   it('marks previous generation batches stale after saving a new requirement version', async () => {

@@ -1,7 +1,7 @@
 use crate::test_design::{
     self, CreateEnvironmentInput, CreateGenerationBatchInput, CreateRegressionConfigInput,
     CreateRequirementVersionInput, CreateReviewRecordInput, CreateTestDesignInput,
-    SaveGenerationCasesInput, UpdateDesignCaseStatusInput, UpdateEnvironmentInput,
+    CreateSystemWithEnvironmentInput, SaveGenerationCasesInput, UpdateDesignCaseStatusInput, UpdateEnvironmentInput,
     UpdateTestDesignInput, UpdateTestSystemInput,
 };
 use rusqlite::Connection;
@@ -112,6 +112,46 @@ fn creates_schema_and_two_systems() {
     let second = test_design::create_system_record(&conn, "admin", "Recruiting").unwrap();
     assert_ne!(first.id, second.id);
     assert_eq!(test_design::list_systems_record(&conn).unwrap().len(), 2);
+}
+
+#[test]
+fn atomically_creates_system_with_first_environment() {
+    let mut conn = connection();
+    let created = test_design::create_system_with_environment_record(
+        &mut conn,
+        "admin",
+        &CreateSystemWithEnvironmentInput {
+            system_name: "试用期管理".to_string(),
+            kind: "test".to_string(),
+            environment_name: "测试环境".to_string(),
+            base_url: "https://onboardingtest.oa.wanmei.net/".to_string(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(created.system.name, "试用期管理");
+    assert_eq!(created.environment.system_id, created.system.id);
+    assert_eq!(created.environment.base_url, "https://onboardingtest.oa.wanmei.net/");
+}
+
+#[test]
+fn atomic_scope_creation_enforces_admin_https_and_rollback() {
+    let input = CreateSystemWithEnvironmentInput {
+        system_name: "Remote HTTP".to_string(),
+        kind: "test".to_string(),
+        environment_name: "测试环境".to_string(),
+        base_url: "http://example.test".to_string(),
+    };
+    let mut conn = connection();
+    assert_eq!(
+        test_design::create_system_with_environment_record(&mut conn, "user", &input).unwrap_err(),
+        "ADMIN_REQUIRED"
+    );
+    assert_eq!(
+        test_design::create_system_with_environment_record(&mut conn, "admin", &input).unwrap_err(),
+        "HTTPS_REQUIRED"
+    );
+    assert_eq!(test_design::list_systems_record(&conn).unwrap().len(), 0);
 }
 
 #[test]

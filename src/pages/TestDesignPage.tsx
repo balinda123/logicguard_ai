@@ -61,7 +61,7 @@ interface Props {
   onNavigate?: (tab: string) => void
 }
 
-export function TestDesignPage({ onNavigate }: Props) {
+export function TestDesignPage({ canManageAccounts = false, onNavigate }: Props) {
   const [scope, setScope] = useState<SystemEnvironmentSelection>()
   const [designs, setDesigns] = useState<TestDesign[]>([])
   const [selectedDesign, setSelectedDesign] = useState<TestDesign>()
@@ -254,13 +254,13 @@ export function TestDesignPage({ onNavigate }: Props) {
       <header className="mb-4 flex items-start justify-between gap-4">
         <div><h2 className="text-lg font-bold text-text-primary">测试设计</h2><p className="mt-1 text-xs text-text-muted">需求、用例、审核与回归统一归属到同一设计单。</p></div>
       </header>
-      <SystemEnvironmentPicker value={scope} onChange={setScope} />
+      <SystemEnvironmentPicker value={scope} onChange={setScope} canCreate={canManageAccounts} />
       {notice && <p role="status" className="my-3 border-l-2 border-brand-500 bg-brand-500/5 px-3 py-2 text-xs text-text-secondary">{notice}</p>}
       <div className="grid min-h-0 flex-1 gap-5 pt-5 lg:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="min-h-0 overflow-y-auto border-r border-border pr-4">
           <div className="mb-3 flex gap-2">
             <input aria-label="新设计名称" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} placeholder="新设计名称" className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-surface-2 px-3 text-xs text-text-primary outline-none" />
-            <button aria-label="新建设计" disabled={!scope || !newTitle.trim()} onClick={() => void createDesign()} className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-500 text-white disabled:opacity-40"><Plus className="h-4 w-4" /></button>
+            <button aria-label="新建设计" disabled={!scope || !newTitle.trim()} onClick={() => void createDesign()} className="flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-md bg-brand-500 px-3 text-xs font-semibold text-white disabled:opacity-40"><Plus className="h-4 w-4" />新建设计</button>
           </div>
           <div className="divide-y divide-border border-y border-border">
             {designs.map((design) => (
@@ -273,7 +273,7 @@ export function TestDesignPage({ onNavigate }: Props) {
           {scope && designs.length === 0 && <p className="py-8 text-center text-xs text-text-muted">当前系统和环境还没有设计。</p>}
         </aside>
         <main className="min-h-0 overflow-y-auto">
-          {!selectedDesign ? <div className="grid h-full place-items-center text-sm text-text-muted">选择或新建一个测试设计。</div> : (
+          {!selectedDesign ? <div className="grid h-full place-items-center text-center text-sm text-text-muted"><div><p className="font-semibold text-text-secondary">{scope ? '新建第一个测试设计' : '先选择系统和环境'}</p><p className="mt-1 text-xs">{scope ? '在左侧输入设计名称，随后从需求来源开始。' : '测试设计的数据会按系统和环境隔离。'}</p></div></div> : (
             <div className="space-y-5">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
                 <div><h3 className="text-base font-bold text-text-primary">{selectedDesign.title}</h3><p className="mt-1 text-[11px] text-text-muted">{scope?.system.name} · {scope?.environment.name}</p></div>

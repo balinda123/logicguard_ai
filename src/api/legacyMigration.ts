@@ -2,7 +2,8 @@ import { invoke } from '@tauri-apps/api/core'
 
 import { loadLegacyTestCases, loadSuites } from './testCaseStore'
 
-const MIGRATION_MARKER = 'logicguard_test_design_migration_v1'
+const MIGRATION_MARKER = 'logicguard_test_design_migration_v2'
+const TRIAL_TEST_BASE_URL = 'https://onboardingtest.oa.wanmei.net'
 // Read-only compatibility source. Remove with the 0.2.0 migration cleanup.
 export const LEGACY_READER_REMOVAL_VERSION = '0.2.0'
 
@@ -73,8 +74,8 @@ export async function migrateLegacyTestData(sharedTestBaseUrl?: string): Promise
   if (localStorage.getItem(markerKey())) return undefined
   const result = await invoke<LegacyMigrationResult>('import_legacy_test_data', {
     payload: {
-      defaultSystemName: '试用期转正系统',
-      sharedTestBaseUrl: sharedTestBaseUrl || undefined,
+      defaultSystemName: '试用期管理',
+      sharedTestBaseUrl: sharedTestBaseUrl || TRIAL_TEST_BASE_URL,
       records: collectLegacyRecords(),
     },
   })

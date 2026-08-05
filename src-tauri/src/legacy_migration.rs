@@ -18,7 +18,8 @@ pub struct LegacyRecord {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LegacyMigrationPayload {
     pub default_system_name: String,
-    pub shared_test_base_url: Option<String>,
+    #[serde(rename = "sharedTestBaseUrl")]
+    pub _shared_test_base_url: Option<String>,
     pub records: Vec<LegacyRecord>,
 }
 
@@ -175,6 +176,7 @@ pub(crate) fn import(
     payload: &LegacyMigrationPayload,
 ) -> Result<LegacyMigrationResult, String> {
     crate::test_design::initialize_schema(conn)?;
+    crate::test_design::ensure_trial_management_scope(conn)?;
     initialize_schema(conn)?;
     if payload.default_system_name.trim().is_empty() {
         return Err("DEFAULT_SYSTEM_NAME_REQUIRED".to_string());
@@ -195,7 +197,7 @@ pub(crate) fn import(
         if already_seen.is_some() {
             continue;
         }
-        let Some((kind, base_url)) = classify_environment(record.login_url.as_deref(), payload.shared_test_base_url.as_deref()) else {
+        let Some((kind, base_url)) = classify_environment(record.login_url.as_deref(), Some(crate::test_design::TRIAL_TEST_BASE_URL)) else {
             transaction.execute(
                 "INSERT INTO migration_quarantine(id,owner_id,source_key,kind,reason,payload_json) VALUES(?1,?2,?3,?4,'ENVIRONMENT_UNRESOLVED',?5)",
                 params![Uuid::new_v4().to_string(), owner_id, record.source_key, record.kind, record.data.to_string()],
@@ -203,7 +205,7 @@ pub(crate) fn import(
             quarantined_records += 1;
             continue;
         };
-        let (system_id, environment_id) = ensure_scope(&transaction, payload.default_system_name.trim(), kind, &base_url)?;
+        let (system_id, environment_id) = ensure_scope(&transaction, crate::test_design::TRIAL_SYSTEM_NAME, kind, &base_url)?;
         let imported_entity_id = if record.kind == "case" {
             imported_cases += 1;
             Some(import_case(&transaction, owner_id, record, &system_id, &environment_id)?)

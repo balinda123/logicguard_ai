@@ -94,6 +94,18 @@ export interface CreateEnvironmentInput {
   baseUrl: string
 }
 
+export interface CreateSystemWithEnvironmentInput {
+  systemName: string
+  kind: EnvironmentKind
+  environmentName: string
+  baseUrl: string
+}
+
+export interface SystemEnvironmentScope {
+  system: TestSystem
+  environment: SystemEnvironment
+}
+
 export interface UpdateEnvironmentInput extends CreateEnvironmentInput {
   id: string
   isEnabled: boolean

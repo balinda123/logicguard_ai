@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { MonitorCog } from 'lucide-react'
+import { MonitorCog, Plus } from 'lucide-react'
 
 import { listSystemEnvironments, listSystems } from '../api/testDesignBridge'
 import type { SystemEnvironment, TestSystem } from '../types/testDesign'
+import { QuickCreateSystemDialog } from './QuickCreateSystemDialog'
 
 export interface SystemEnvironmentSelection {
   system: TestSystem
@@ -12,12 +13,14 @@ export interface SystemEnvironmentSelection {
 interface Props {
   value?: SystemEnvironmentSelection
   onChange: (selection: SystemEnvironmentSelection | undefined) => void
+  canCreate?: boolean
 }
 
-export function SystemEnvironmentPicker({ value, onChange }: Props) {
+export function SystemEnvironmentPicker({ value, onChange, canCreate = false }: Props) {
   const [systems, setSystems] = useState<TestSystem[]>([])
   const [environments, setEnvironments] = useState<SystemEnvironment[]>([])
   const [loading, setLoading] = useState(true)
+  const [dialogOpen, setDialogOpen] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -60,7 +63,8 @@ export function SystemEnvironmentPicker({ value, onChange }: Props) {
   return (
     <div className="flex flex-wrap items-end gap-3 border-b border-border pb-4">
       <MonitorCog className="mb-2 h-4 w-4 text-brand-400" aria-hidden="true" />
-      <label className="min-w-48 flex-1">
+      <div className="flex min-w-48 flex-1 items-end gap-2">
+      <label className="min-w-0 flex-1">
         <span className="mb-1.5 block text-[11px] font-semibold text-text-muted">系统</span>
         <select
           aria-label="系统"
@@ -73,6 +77,8 @@ export function SystemEnvironmentPicker({ value, onChange }: Props) {
           {systems.map((system) => <option key={system.id} value={system.id}>{system.name}</option>)}
         </select>
       </label>
+      {canCreate && <button type="button" aria-label="快速新建系统" title="快速新建系统" onClick={() => setDialogOpen(true)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-brand-500/40 text-brand-400 hover:bg-brand-500/10"><Plus className="h-4 w-4" /></button>}
+      </div>
       <label className="min-w-48 flex-1">
         <span className="mb-1.5 block text-[11px] font-semibold text-text-muted">环境</span>
         <select
@@ -94,6 +100,18 @@ export function SystemEnvironmentPicker({ value, onChange }: Props) {
         </select>
       </label>
       {value && <span className="mb-2 text-[11px] text-text-muted">{value.environment.baseUrl}</span>}
+      {!loading && systems.length === 0 && <p className="w-full text-xs text-text-muted">{canCreate ? '新建系统和首个环境后即可开始测试设计。' : '请联系管理员配置系统和环境。'}</p>}
+      {!loading && systems.length > 0 && !value && <p className="w-full text-xs text-text-muted">当前系统没有启用的环境，请由管理员在系统设置中补充。</p>}
+      <QuickCreateSystemDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        suggestedSystemName={systems.length === 0 ? '试用期管理' : ''}
+        onCreated={(created) => {
+          setSystems((current) => current.some((item) => item.id === created.system.id) ? current : [...current, created.system])
+          setEnvironments([created.environment])
+          onChange(created)
+        }}
+      />
     </div>
   )
 }

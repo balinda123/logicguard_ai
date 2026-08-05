@@ -4,6 +4,9 @@ use serde_json::Value;
 use uuid::Uuid;
 
 const ENVIRONMENT_KINDS: &[&str] = &["local", "test"];
+pub(crate) const TRIAL_SYSTEM_NAME: &str = "试用期管理";
+const LEGACY_TRIAL_SYSTEM_NAME: &str = "试用期转正系统";
+pub(crate) const TRIAL_TEST_BASE_URL: &str = "https://onboardingtest.oa.wanmei.net";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +28,13 @@ pub struct SystemEnvironment {
     pub is_enabled: bool,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemEnvironmentScope {
+    pub system: TestSystem,
+    pub environment: SystemEnvironment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +126,15 @@ pub struct CreateEnvironmentInput {
     pub system_id: String,
     pub kind: String,
     pub name: String,
+    pub base_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateSystemWithEnvironmentInput {
+    pub system_name: String,
+    pub kind: String,
+    pub environment_name: String,
     pub base_url: String,
 }
 
@@ -242,6 +261,12 @@ fn validate_environment(kind: &str, name: &str, base_url: &str) -> Result<(), St
     let url = reqwest::Url::parse(base_url).map_err(|_| "INVALID_BASE_URL".to_string())?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err("INVALID_BASE_URL".to_string());
+    }
+    let is_local = url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+    });
+    if url.scheme() != "https" && !is_local {
+        return Err("HTTPS_REQUIRED".to_string());
     }
     Ok(())
 }
@@ -465,6 +490,204 @@ pub(crate) fn initialize_schema(conn: &Connection) -> Result<(), String> {
     .map_err(db_error)
 }
 
+fn table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|value| value != 0)
+    .map_err(db_error)
+}
+
+fn normalized_base_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
+pub(crate) fn ensure_trial_management_scope(
+    conn: &mut Connection,
+) -> Result<SystemEnvironmentScope, String> {
+    initialize_schema(conn)?;
+    let transaction = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db_error)?;
+    transaction
+        .execute_batch("PRAGMA defer_foreign_keys=ON;")
+        .map_err(db_error)?;
+
+    let target_id: Option<String> = transaction
+        .query_row(
+            "SELECT id FROM systems WHERE name=?1 COLLATE NOCASE",
+            [TRIAL_SYSTEM_NAME],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let legacy_id: Option<String> = transaction
+        .query_row(
+            "SELECT id FROM systems WHERE name=?1 COLLATE NOCASE",
+            [LEGACY_TRIAL_SYSTEM_NAME],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+
+    let target_id = match (target_id, legacy_id.as_ref()) {
+        (Some(id), _) => id,
+        (None, Some(id)) => {
+            transaction
+                .execute(
+                    "UPDATE systems SET name=?1, updated_at=CURRENT_TIMESTAMP WHERE id=?2",
+                    params![TRIAL_SYSTEM_NAME, id],
+                )
+                .map_err(db_error)?;
+            id.clone()
+        }
+        (None, None) => {
+            let id = Uuid::new_v4().to_string();
+            transaction
+                .execute(
+                    "INSERT INTO systems(id, name) VALUES(?1, ?2)",
+                    params![id, TRIAL_SYSTEM_NAME],
+                )
+                .map_err(db_error)?;
+            id
+        }
+    };
+
+    if let Some(legacy_id) = legacy_id.filter(|id| id != &target_id) {
+        let legacy_environments = {
+            let mut statement = transaction
+                .prepare("SELECT id, kind, name, base_url FROM system_environments WHERE system_id=?1")
+                .map_err(db_error)?;
+            let rows = statement
+                .query_map([&legacy_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?))
+                })
+                .map_err(db_error)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(db_error)?;
+            rows
+        };
+        for (environment_id, kind, name, base_url) in legacy_environments {
+            let target_environments = {
+                let mut statement = transaction
+                    .prepare("SELECT id, base_url FROM system_environments WHERE system_id=?1 AND kind=?2")
+                    .map_err(db_error)?;
+                let rows = statement
+                    .query_map(params![target_id, kind], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                    .map_err(db_error)?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(db_error)?;
+                rows
+            };
+            let matching_id = target_environments
+                .into_iter()
+                .find(|(_, candidate)| normalized_base_url(candidate) == normalized_base_url(&base_url))
+                .map(|(id, _)| id);
+            if let Some(matching_id) = matching_id {
+                transaction
+                    .execute(
+                        "UPDATE test_designs
+                         SET title=title || '（旧系统-' || substr(id,1,8) || '）', updated_at=CURRENT_TIMESTAMP
+                         WHERE system_id=?1 AND environment_id=?2
+                           AND EXISTS (
+                             SELECT 1 FROM test_designs AS target
+                             WHERE target.owner_id=test_designs.owner_id
+                               AND target.environment_id=?3
+                               AND target.title=test_designs.title COLLATE NOCASE
+                           )",
+                        params![legacy_id, environment_id, matching_id],
+                    )
+                    .map_err(db_error)?;
+                transaction
+                    .execute(
+                        "UPDATE test_designs SET system_id=?1, environment_id=?2 WHERE system_id=?3 AND environment_id=?4",
+                        params![target_id, matching_id, legacy_id, environment_id],
+                    )
+                    .map_err(db_error)?;
+                for table in ["test_accounts", "account_combinations", "workflow_scenarios", "workflow_runs", "failure_evidence", "defect_drafts"] {
+                    if table_exists(&transaction, table)? {
+                        transaction
+                            .execute(
+                                &format!("UPDATE {table} SET system_id=?1, environment_id=?2 WHERE system_id=?3 AND environment_id=?4"),
+                                params![target_id, matching_id, legacy_id, environment_id],
+                            )
+                            .map_err(db_error)?;
+                    }
+                }
+                transaction
+                    .execute("DELETE FROM system_environments WHERE id=?1", [&environment_id])
+                    .map_err(db_error)?;
+            } else {
+                let duplicate_name: bool = transaction
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM system_environments WHERE system_id=?1 AND name=?2 COLLATE NOCASE)",
+                        params![target_id, name],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(db_error)? != 0;
+                let merged_name = if duplicate_name { format!("{name}（旧系统）") } else { name };
+                transaction
+                    .execute(
+                        "UPDATE system_environments SET system_id=?1, name=?2, updated_at=CURRENT_TIMESTAMP WHERE id=?3",
+                        params![target_id, merged_name, environment_id],
+                    )
+                    .map_err(db_error)?;
+                transaction
+                    .execute(
+                        "UPDATE test_designs SET system_id=?1 WHERE system_id=?2 AND environment_id=?3",
+                        params![target_id, legacy_id, environment_id],
+                    )
+                    .map_err(db_error)?;
+            }
+        }
+        for table in ["test_accounts", "account_combinations", "workflow_scenarios", "workflow_runs", "failure_evidence", "defect_drafts"] {
+            if table_exists(&transaction, table)? {
+                transaction
+                    .execute(
+                        &format!("UPDATE {table} SET system_id=?1 WHERE system_id=?2"),
+                        params![target_id, legacy_id],
+                    )
+                    .map_err(db_error)?;
+            }
+        }
+        transaction
+            .execute("DELETE FROM systems WHERE id=?1", [&legacy_id])
+            .map_err(db_error)?;
+    }
+
+    let test_environments = {
+        let mut statement = transaction
+            .prepare("SELECT id, base_url FROM system_environments WHERE system_id=?1 AND kind='test'")
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([&target_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .map_err(db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error)?;
+        rows
+    };
+    let environment_id = test_environments
+        .into_iter()
+        .find(|(_, base_url)| normalized_base_url(base_url) == TRIAL_TEST_BASE_URL)
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    transaction
+        .execute(
+            "INSERT INTO system_environments(id,system_id,kind,name,base_url) VALUES(?1,?2,'test','测试环境',?3)
+             ON CONFLICT(id) DO UPDATE SET base_url=excluded.base_url, updated_at=CURRENT_TIMESTAMP",
+            params![environment_id, target_id, TRIAL_TEST_BASE_URL],
+        )
+        .map_err(db_error)?;
+    let scope = SystemEnvironmentScope {
+        system: get_system(&transaction, &target_id)?,
+        environment: get_environment(&transaction, &environment_id)?,
+    };
+    transaction.commit().map_err(db_error)?;
+    Ok(scope)
+}
+
 fn get_system(conn: &Connection, id: &str) -> Result<TestSystem, String> {
     conn.query_row(
         "SELECT id, name, created_at, updated_at FROM systems WHERE id=?1",
@@ -502,6 +725,40 @@ pub(crate) fn create_system_record(
     )
     .map_err(db_error)?;
     get_system(conn, &id)
+}
+
+pub(crate) fn create_system_with_environment_record(
+    conn: &mut Connection,
+    actor_role: &str,
+    input: &CreateSystemWithEnvironmentInput,
+) -> Result<SystemEnvironmentScope, String> {
+    ensure_admin_role(actor_role)?;
+    required(&input.system_name, "SYSTEM_NAME")?;
+    validate_environment(&input.kind, &input.environment_name, &input.base_url)?;
+
+    let transaction = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db_error)?;
+    let system_id = Uuid::new_v4().to_string();
+    transaction
+        .execute(
+            "INSERT INTO systems(id, name) VALUES(?1, ?2)",
+            params![system_id, input.system_name.trim()],
+        )
+        .map_err(db_error)?;
+    let environment_id = Uuid::new_v4().to_string();
+    transaction
+        .execute(
+            "INSERT INTO system_environments(id, system_id, kind, name, base_url) VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![environment_id, system_id, input.kind, input.environment_name.trim(), input.base_url.trim()],
+        )
+        .map_err(db_error)?;
+    let scope = SystemEnvironmentScope {
+        system: get_system(&transaction, &system_id)?,
+        environment: get_environment(&transaction, &environment_id)?,
+    };
+    transaction.commit().map_err(db_error)?;
+    Ok(scope)
 }
 
 pub(crate) fn update_system_record(
@@ -987,6 +1244,16 @@ pub fn list_systems(app: tauri::AppHandle) -> Result<Vec<TestSystem>, String> {
 pub fn create_system(app: tauri::AppHandle, name: String) -> Result<TestSystem, String> {
     let admin = crate::auth::require_admin()?;
     create_system_record(&crate::auth::open_db(&app)?, &admin.role, &name)
+}
+
+#[tauri::command]
+pub fn create_system_with_environment(
+    app: tauri::AppHandle,
+    input: CreateSystemWithEnvironmentInput,
+) -> Result<SystemEnvironmentScope, String> {
+    let actor = crate::auth::current_user()?;
+    let mut conn = crate::auth::open_db(&app)?;
+    create_system_with_environment_record(&mut conn, &actor.role, &input)
 }
 
 #[tauri::command]

@@ -34,7 +34,7 @@ fn session() -> &'static Mutex<Option<SessionUser>> {
 pub(crate) fn open_db(app: &tauri::AppHandle) -> Result<Connection, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let conn = Connection::open(dir.join("logicguard.db")).map_err(|e| e.to_string())?;
+    let mut conn = Connection::open(dir.join("logicguard.db")).map_err(|e| e.to_string())?;
     conn.execute_batch(
         "PRAGMA foreign_keys=ON;
          CREATE TABLE IF NOT EXISTS users (
@@ -49,6 +49,7 @@ pub(crate) fn open_db(app: &tauri::AppHandle) -> Result<Connection, String> {
     .map_err(|e| e.to_string())?;
     crate::testing::initialize_schema(&conn)?;
     crate::test_design::initialize_schema(&conn)?;
+    crate::test_design::ensure_trial_management_scope(&mut conn)?;
     Ok(conn)
 }
 

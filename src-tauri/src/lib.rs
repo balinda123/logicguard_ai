@@ -56,6 +56,7 @@ pub fn run() {
             auth::credential_status,
             test_design::list_systems,
             test_design::create_system,
+            test_design::create_system_with_environment,
             test_design::update_system,
             test_design::list_system_environments,
             test_design::create_system_environment,

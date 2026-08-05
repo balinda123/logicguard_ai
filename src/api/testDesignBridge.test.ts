@@ -6,6 +6,7 @@ import {
   createRequirementVersion,
   createReview,
   createSystem,
+  createSystemWithEnvironment,
   createSystemEnvironment,
   createTestDesign,
   getRegressionConfig,
@@ -50,6 +51,7 @@ describe('testDesignBridge', () => {
 
     await listSystems()
     await createSystem('Payroll')
+    await createSystemWithEnvironment({ systemName: 'Trial', kind: 'test', environmentName: 'QA', baseUrl: 'https://qa.example.test' })
     await updateSystem({ id: 'system-1', name: 'Payroll v2' })
     await listSystemEnvironments('system-1')
     await createSystemEnvironment({ systemId: 'system-1', kind: 'local', name: 'Local', baseUrl: 'http://localhost:3000' })
@@ -72,6 +74,7 @@ describe('testDesignBridge', () => {
     expect(invokeMock.mock.calls).toEqual([
       ['list_systems'],
       ['create_system', { name: 'Payroll' }],
+      ['create_system_with_environment', { input: { systemName: 'Trial', kind: 'test', environmentName: 'QA', baseUrl: 'https://qa.example.test' } }],
       ['update_system', { input: { id: 'system-1', name: 'Payroll v2' } }],
       ['list_system_environments', { systemId: 'system-1' }],
       ['create_system_environment', { input: { systemId: 'system-1', kind: 'local', name: 'Local', baseUrl: 'http://localhost:3000' } }],
