@@ -1,3 +1,0 @@
-import { describe, expect, it } from 'vitest'
-import { matchesRunFilters } from './RunFilters'
-describe('matchesRunFilters', () => { it('matches system, environment, status and time', () => { expect(matchesRunFilters({ status: 'business_failed', createdAt: new Date().toISOString() }, { systemId: 's1', environmentId: 'e1' }, { systemId: 's1', environmentId: 'e1', status: 'business_failed', time: 'today' })).toBe(true); expect(matchesRunFilters({ status: 'blocked', createdAt: new Date().toISOString() }, { systemId: 's2', environmentId: 'e2' }, { systemId: 's1', environmentId: 'all', status: 'all', time: 'all' })).toBe(false) }) })

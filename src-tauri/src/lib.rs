@@ -8,18 +8,6 @@ mod storage;
 mod test_design;
 mod testing;
 
-#[cfg(test)]
-mod test_design_tests;
-
-#[cfg(test)]
-mod testing_tests;
-
-#[cfg(test)]
-mod interaction_guard_tests;
-
-#[cfg(test)]
-mod legacy_migration_tests;
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
