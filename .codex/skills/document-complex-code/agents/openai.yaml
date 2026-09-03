@@ -1,0 +1,4 @@
+interface:
+  display_name: "复杂代码注释"
+  short_description: "为复杂业务、状态机、协议与迁移补充高价值中文代码注释"
+  default_prompt: "Use $document-complex-code to add concise, high-value comments to complex LogicGuard AI code."
