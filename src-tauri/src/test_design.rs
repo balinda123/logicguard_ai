@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection, ErrorCode, OptionalExtension, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use uuid::Uuid;
 
 const ENVIRONMENT_KINDS: &[&str] = &["local", "test"];
@@ -25,6 +26,8 @@ pub struct SystemEnvironment {
     pub kind: String,
     pub name: String,
     pub base_url: String,
+    pub login_url: String,
+    pub handoff_origins: Vec<String>,
     pub is_enabled: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -106,6 +109,7 @@ pub struct ReviewRecord {
 pub struct RegressionConfig {
     pub id: String,
     pub design_id: String,
+    pub name: String,
     pub suite_id: Option<String>,
     pub account_combination_id: Option<String>,
     pub case_ids_json: String,
@@ -127,6 +131,9 @@ pub struct CreateEnvironmentInput {
     pub kind: String,
     pub name: String,
     pub base_url: String,
+    pub login_url: String,
+    #[serde(default)]
+    pub handoff_origins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,6 +143,9 @@ pub struct CreateSystemWithEnvironmentInput {
     pub kind: String,
     pub environment_name: String,
     pub base_url: String,
+    pub login_url: String,
+    #[serde(default)]
+    pub handoff_origins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -146,7 +156,22 @@ pub struct UpdateEnvironmentInput {
     pub kind: String,
     pub name: String,
     pub base_url: String,
+    pub login_url: String,
+    #[serde(default)]
+    pub handoff_origins: Vec<String>,
     pub is_enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeleteSystemInput {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeleteEnvironmentInput {
+    pub id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -204,6 +229,14 @@ pub struct UpdateDesignCaseStatusInput {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateDesignTestCaseInput {
+    pub design_id: String,
+    pub case_id: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateReviewRecordInput {
     pub design_id: String,
     pub generation_batch_id: String,
@@ -215,6 +248,7 @@ pub struct CreateReviewRecordInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateRegressionConfigInput {
     pub design_id: String,
+    pub name: String,
     pub suite_id: Option<String>,
     pub account_combination_id: Option<String>,
     pub case_ids_json: String,
@@ -233,7 +267,7 @@ fn db_error(error: rusqlite::Error) -> String {
     ) {
         "DATABASE_BUSY".to_string()
     } else {
-        "DATABASE_OPERATION_FAILED".to_string()
+        format!("DATABASE_OPERATION_FAILED: {error}")
     }
 }
 
@@ -271,6 +305,35 @@ fn validate_environment(kind: &str, name: &str, base_url: &str) -> Result<(), St
     Ok(())
 }
 
+fn validate_login_config(login_url: &str, handoff_origins: &[String]) -> Result<(), String> {
+    let login = reqwest::Url::parse(login_url).map_err(|_| "INVALID_LOGIN_URL".to_string())?;
+    let login_host = login.host_str().unwrap_or_default();
+    let login_scheme_allowed = login.scheme() == "https"
+        || (login.scheme() == "http"
+            && matches!(login_host, "localhost" | "127.0.0.1" | "::1"));
+    if !login_scheme_allowed || login_host.is_empty() {
+        return Err("INVALID_LOGIN_URL".to_string());
+    }
+    for origin in handoff_origins {
+        let parsed = reqwest::Url::parse(origin).map_err(|_| "INVALID_HANDOFF_ORIGIN".to_string())?;
+        let host = parsed.host_str().unwrap_or_default();
+        let scheme_allowed = parsed.scheme() == "https"
+            || (parsed.scheme() == "http" && matches!(host, "localhost" | "127.0.0.1" | "::1"));
+        // 可信域名会放宽浏览器人工接管边界，只接受纯 origin，禁止路径、凭据和远程 HTTP。
+        if !scheme_allowed
+            || host.is_empty()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.path() != "/"
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+        {
+            return Err("INVALID_HANDOFF_ORIGIN".to_string());
+        }
+    }
+    Ok(())
+}
+
 fn validate_case_ids_json(value: &str) -> Result<(), String> {
     let parsed: Value =
         serde_json::from_str(value).map_err(|_| "INVALID_CASE_IDS_JSON".to_string())?;
@@ -294,15 +357,24 @@ fn read_system(row: &Row<'_>) -> rusqlite::Result<TestSystem> {
 }
 
 fn read_environment(row: &Row<'_>) -> rusqlite::Result<SystemEnvironment> {
+    let handoff_origins_json: String = row.get(6)?;
     Ok(SystemEnvironment {
         id: row.get(0)?,
         system_id: row.get(1)?,
         kind: row.get(2)?,
         name: row.get(3)?,
         base_url: row.get(4)?,
-        is_enabled: row.get::<_, i64>(5)? != 0,
-        created_at: row.get(6)?,
-        updated_at: row.get(7)?,
+        login_url: row.get(5)?,
+        handoff_origins: serde_json::from_str(&handoff_origins_json).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                6,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?,
+        is_enabled: row.get::<_, i64>(7)? != 0,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
     })
 }
 
@@ -361,11 +433,12 @@ fn read_regression_config(row: &Row<'_>) -> rusqlite::Result<RegressionConfig> {
     Ok(RegressionConfig {
         id: row.get(0)?,
         design_id: row.get(1)?,
-        suite_id: row.get(2)?,
-        account_combination_id: row.get(3)?,
-        case_ids_json: row.get(4)?,
-        created_at: row.get(5)?,
-        updated_at: row.get(6)?,
+        name: row.get(2)?,
+        suite_id: row.get(3)?,
+        account_combination_id: row.get(4)?,
+        case_ids_json: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
     })
 }
 
@@ -403,6 +476,8 @@ pub(crate) fn initialize_schema(conn: &Connection) -> Result<(), String> {
            kind TEXT NOT NULL CHECK(kind IN ('local','test')),
            name TEXT NOT NULL,
            base_url TEXT NOT NULL,
+           login_url TEXT NOT NULL DEFAULT '',
+           handoff_origins_json TEXT NOT NULL DEFAULT '[]',
            is_enabled INTEGER NOT NULL DEFAULT 1 CHECK(is_enabled IN (0,1)),
            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -474,6 +549,7 @@ pub(crate) fn initialize_schema(conn: &Connection) -> Result<(), String> {
          CREATE TABLE IF NOT EXISTS regression_configs (
            id TEXT PRIMARY KEY,
            design_id TEXT NOT NULL UNIQUE REFERENCES test_designs(id),
+           name TEXT NOT NULL DEFAULT '默认测试集合',
            suite_id TEXT,
            account_combination_id TEXT,
            case_ids_json TEXT NOT NULL,
@@ -487,7 +563,27 @@ pub(crate) fn initialize_schema(conn: &Connection) -> Result<(), String> {
          CREATE INDEX IF NOT EXISTS idx_test_cases_design ON test_cases(design_id, created_at DESC);
          CREATE INDEX IF NOT EXISTS idx_review_records_design ON review_records(design_id, created_at DESC);",
     )
-    .map_err(db_error)
+    .map_err(db_error)?;
+    let _ = conn.execute(
+        "ALTER TABLE regression_configs ADD COLUMN name TEXT NOT NULL DEFAULT '默认测试集合'",
+        [],
+    );
+    // 旧数据库没有环境级登录配置；保留空值，让运行时继续回退历史账号配置，
+    // 管理员保存环境后才切换为新的单一来源，避免升级直接改变既有登录流程。
+    let _ = conn.execute(
+        "ALTER TABLE system_environments ADD COLUMN login_url TEXT NOT NULL DEFAULT ''",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE system_environments ADD COLUMN handoff_origins_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    Ok(())
+}
+
+fn case_ids(value: &str) -> Result<Vec<String>, String> {
+    validate_case_ids_json(value)?;
+    serde_json::from_str(value).map_err(|_| "INVALID_CASE_IDS_JSON".to_string())
 }
 
 fn table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
@@ -659,27 +755,38 @@ pub(crate) fn ensure_trial_management_scope(
 
     let test_environments = {
         let mut statement = transaction
-            .prepare("SELECT id, base_url FROM system_environments WHERE system_id=?1 AND kind='test'")
+            .prepare("SELECT id, name, base_url FROM system_environments WHERE system_id=?1 AND kind='test'")
             .map_err(db_error)?;
         let rows = statement
-            .query_map([&target_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .query_map([&target_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
             .map_err(db_error)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(db_error)?;
         rows
     };
-    let environment_id = test_environments
-        .into_iter()
-        .find(|(_, base_url)| normalized_base_url(base_url) == TRIAL_TEST_BASE_URL)
-        .map(|(id, _)| id)
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-    transaction
-        .execute(
-            "INSERT INTO system_environments(id,system_id,kind,name,base_url) VALUES(?1,?2,'test','测试环境',?3)
-             ON CONFLICT(id) DO UPDATE SET base_url=excluded.base_url, updated_at=CURRENT_TIMESTAMP",
-            params![environment_id, target_id, TRIAL_TEST_BASE_URL],
-        )
-        .map_err(db_error)?;
+    let existing_environment_id = test_environments
+        .iter()
+        .find(|(_, _, base_url)| normalized_base_url(base_url) == TRIAL_TEST_BASE_URL)
+        .or_else(|| test_environments.iter().find(|(_, name, _)| name.eq_ignore_ascii_case("测试环境")))
+        .map(|(id, _, _)| id.clone());
+    let environment_id = if let Some(id) = existing_environment_id {
+        id
+    } else {
+        let id = Uuid::new_v4().to_string();
+        transaction
+            .execute(
+                "INSERT INTO system_environments(id,system_id,kind,name,base_url) VALUES(?1,?2,'test','测试环境',?3)",
+                params![id, target_id, TRIAL_TEST_BASE_URL],
+            )
+            .map_err(db_error)?;
+        id
+    };
     let scope = SystemEnvironmentScope {
         system: get_system(&transaction, &target_id)?,
         environment: get_environment(&transaction, &environment_id)?,
@@ -735,6 +842,9 @@ pub(crate) fn create_system_with_environment_record(
     ensure_admin_role(actor_role)?;
     required(&input.system_name, "SYSTEM_NAME")?;
     validate_environment(&input.kind, &input.environment_name, &input.base_url)?;
+    validate_login_config(&input.login_url, &input.handoff_origins)?;
+    let handoff_origins_json = serde_json::to_string(&input.handoff_origins)
+        .map_err(|error| format!("INVALID_HANDOFF_ORIGINS: {error}"))?;
 
     let transaction = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -749,8 +859,8 @@ pub(crate) fn create_system_with_environment_record(
     let environment_id = Uuid::new_v4().to_string();
     transaction
         .execute(
-            "INSERT INTO system_environments(id, system_id, kind, name, base_url) VALUES(?1, ?2, ?3, ?4, ?5)",
-            params![environment_id, system_id, input.kind, input.environment_name.trim(), input.base_url.trim()],
+            "INSERT INTO system_environments(id, system_id, kind, name, base_url, login_url, handoff_origins_json) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![environment_id, system_id, input.kind, input.environment_name.trim(), input.base_url.trim(), input.login_url.trim(), handoff_origins_json],
         )
         .map_err(db_error)?;
     let scope = SystemEnvironmentScope {
@@ -780,9 +890,28 @@ pub(crate) fn update_system_record(
     get_system(conn, &input.id)
 }
 
+pub(crate) fn delete_system_record(
+    conn: &mut Connection,
+    actor_role: &str,
+    id: &str,
+) -> Result<(), String> {
+    ensure_admin_role(actor_role)?;
+    get_system(conn, id)?;
+    let in_use: i64 = conn
+        .query_row("SELECT COUNT(*) FROM test_designs WHERE system_id=?1", [id], |row| row.get(0))
+        .map_err(db_error)?;
+    if in_use > 0 {
+        return Err("SYSTEM_IN_USE".to_string());
+    }
+    let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db_error)?;
+    transaction.execute("DELETE FROM system_environments WHERE system_id=?1", [id]).map_err(db_error)?;
+    transaction.execute("DELETE FROM systems WHERE id=?1", [id]).map_err(db_error)?;
+    transaction.commit().map_err(db_error)
+}
+
 fn get_environment(conn: &Connection, id: &str) -> Result<SystemEnvironment, String> {
     conn.query_row(
-        "SELECT id, system_id, kind, name, base_url, is_enabled, created_at, updated_at FROM system_environments WHERE id=?1",
+        "SELECT id, system_id, kind, name, base_url, login_url, handoff_origins_json, is_enabled, created_at, updated_at FROM system_environments WHERE id=?1",
         [id],
         read_environment,
     )
@@ -797,7 +926,7 @@ pub(crate) fn list_environments_record(
 ) -> Result<Vec<SystemEnvironment>, String> {
     get_system(conn, system_id)?;
     let mut statement = conn
-        .prepare("SELECT id, system_id, kind, name, base_url, is_enabled, created_at, updated_at FROM system_environments WHERE system_id=?1 ORDER BY is_enabled DESC, kind, name")
+        .prepare("SELECT id, system_id, kind, name, base_url, login_url, handoff_origins_json, is_enabled, created_at, updated_at FROM system_environments WHERE system_id=?1 ORDER BY is_enabled DESC, kind, name")
         .map_err(db_error)?;
     let result = statement
         .query_map([system_id], read_environment)
@@ -815,10 +944,13 @@ pub(crate) fn create_environment_record(
     ensure_admin_role(actor_role)?;
     get_system(conn, &input.system_id)?;
     validate_environment(&input.kind, &input.name, &input.base_url)?;
+    validate_login_config(&input.login_url, &input.handoff_origins)?;
+    let handoff_origins_json = serde_json::to_string(&input.handoff_origins)
+        .map_err(|error| format!("INVALID_HANDOFF_ORIGINS: {error}"))?;
     let id = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO system_environments(id, system_id, kind, name, base_url) VALUES(?1, ?2, ?3, ?4, ?5)",
-        params![id, input.system_id, input.kind, input.name.trim(), input.base_url.trim()],
+        "INSERT INTO system_environments(id, system_id, kind, name, base_url, login_url, handoff_origins_json) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![id, input.system_id, input.kind, input.name.trim(), input.base_url.trim(), input.login_url.trim(), handoff_origins_json],
     )
     .map_err(db_error)?;
     get_environment(conn, &id)
@@ -830,18 +962,48 @@ pub(crate) fn update_environment_record(
     input: &UpdateEnvironmentInput,
 ) -> Result<SystemEnvironment, String> {
     ensure_admin_role(actor_role)?;
+    let current = get_environment(conn, &input.id)?;
     get_system(conn, &input.system_id)?;
     validate_environment(&input.kind, &input.name, &input.base_url)?;
+    if input.login_url.trim().is_empty() {
+        // 历史环境迁移后登录地址为空时，启停等非配置操作必须保留旧账号级回退；
+        // 已经迁移到环境级配置的数据则不允许再次清空，避免运行时静默降级。
+        if !current.login_url.is_empty() || !input.handoff_origins.is_empty() {
+            return Err("INVALID_LOGIN_URL".to_string());
+        }
+    } else {
+        validate_login_config(&input.login_url, &input.handoff_origins)?;
+    }
+    let handoff_origins_json = serde_json::to_string(&input.handoff_origins)
+        .map_err(|error| format!("INVALID_HANDOFF_ORIGINS: {error}"))?;
     let changed = conn
         .execute(
-            "UPDATE system_environments SET system_id=?1, kind=?2, name=?3, base_url=?4, is_enabled=?5, updated_at=CURRENT_TIMESTAMP WHERE id=?6",
-            params![input.system_id, input.kind, input.name.trim(), input.base_url.trim(), input.is_enabled, input.id],
+            "UPDATE system_environments SET system_id=?1, kind=?2, name=?3, base_url=?4, login_url=?5, handoff_origins_json=?6, is_enabled=?7, updated_at=CURRENT_TIMESTAMP WHERE id=?8",
+            params![input.system_id, input.kind, input.name.trim(), input.base_url.trim(), input.login_url.trim(), handoff_origins_json, input.is_enabled, input.id],
         )
         .map_err(db_error)?;
     if changed == 0 {
         return Err("NOT_FOUND".to_string());
     }
     get_environment(conn, &input.id)
+}
+
+pub(crate) fn delete_environment_record(
+    conn: &Connection,
+    actor_role: &str,
+    id: &str,
+) -> Result<(), String> {
+    ensure_admin_role(actor_role)?;
+    get_environment(conn, id)?;
+    let in_use: i64 = conn
+        .query_row("SELECT COUNT(*) FROM test_designs WHERE environment_id=?1", [id], |row| row.get(0))
+        .map_err(db_error)?;
+    if in_use > 0 {
+        return Err("ENVIRONMENT_IN_USE".to_string());
+    }
+    let changed = conn.execute("DELETE FROM system_environments WHERE id=?1", [id]).map_err(db_error)?;
+    if changed == 0 { return Err("NOT_FOUND".to_string()); }
+    Ok(())
 }
 
 fn validate_scope(conn: &Connection, system_id: &str, environment_id: &str) -> Result<(), String> {
@@ -1042,7 +1204,7 @@ pub(crate) fn list_design_test_cases_record(
 ) -> Result<Vec<DesignTestCase>, String> {
     get_design(conn, owner_id, design_id)?;
     let mut statement = conn
-        .prepare("SELECT id, design_id, requirement_version_id, generation_batch_id, payload_json, status, created_at, updated_at FROM test_cases WHERE design_id=?1 ORDER BY created_at DESC, id DESC")
+        .prepare("SELECT id, design_id, requirement_version_id, generation_batch_id, payload_json, status, created_at, updated_at FROM test_cases WHERE design_id=?1 AND status<>'archived' ORDER BY created_at DESC, id DESC")
         .map_err(db_error)?;
     let result = statement
         .query_map([design_id], read_design_test_case)
@@ -1127,6 +1289,36 @@ pub(crate) fn update_design_case_status_record(
     .map_err(db_error)
 }
 
+pub(crate) fn update_design_test_case_record(
+    conn: &Connection,
+    owner_id: &str,
+    input: &UpdateDesignTestCaseInput,
+) -> Result<DesignTestCase, String> {
+    get_design(conn, owner_id, &input.design_id)?;
+    let mut payload = input
+        .payload
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "INVALID_TEST_CASE".to_string())?;
+    payload.insert("id".to_string(), Value::String(input.case_id.clone()));
+    payload.insert("status".to_string(), Value::String("draft".to_string()));
+    let changed = conn
+        .execute(
+            "UPDATE test_cases SET payload_json=?1, status='draft', updated_at=CURRENT_TIMESTAMP WHERE id=?2 AND design_id=?3 AND status<>'archived'",
+            params![Value::Object(payload).to_string(), input.case_id, input.design_id],
+        )
+        .map_err(db_error)?;
+    if changed == 0 {
+        return Err("NOT_FOUND".to_string());
+    }
+    conn.query_row(
+        "SELECT id, design_id, requirement_version_id, generation_batch_id, payload_json, status, created_at, updated_at FROM test_cases WHERE id=?1 AND design_id=?2",
+        params![input.case_id, input.design_id],
+        read_design_test_case,
+    )
+    .map_err(db_error)
+}
+
 pub(crate) fn list_review_records_record(
     conn: &Connection,
     owner_id: &str,
@@ -1187,7 +1379,7 @@ pub(crate) fn get_regression_config_record(
 ) -> Result<Option<RegressionConfig>, String> {
     get_design(conn, owner_id, design_id)?;
     conn.query_row(
-        "SELECT id, design_id, suite_id, account_combination_id, case_ids_json, created_at, updated_at FROM regression_configs WHERE design_id=?1",
+        "SELECT id, design_id, name, suite_id, account_combination_id, case_ids_json, created_at, updated_at FROM regression_configs WHERE design_id=?1",
         [design_id],
         read_regression_config,
     )
@@ -1201,7 +1393,25 @@ pub(crate) fn save_regression_config_record(
     input: &CreateRegressionConfigInput,
 ) -> Result<RegressionConfig, String> {
     get_design(conn, owner_id, &input.design_id)?;
-    validate_case_ids_json(&input.case_ids_json)?;
+    required(&input.name, "REGRESSION_CONFIG_NAME")?;
+    let case_ids = case_ids(&input.case_ids_json)?;
+    let mut unique_ids = HashSet::new();
+    if case_ids.iter().any(|case_id| !unique_ids.insert(case_id)) {
+        return Err("INVALID_REGRESSION_CASES".to_string());
+    }
+    for case_id in &case_ids {
+        let valid: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM test_cases WHERE id=?1 AND design_id=?2 AND status='confirmed'",
+                params![case_id, input.design_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        if valid.is_none() {
+            return Err("INVALID_REGRESSION_CASES".to_string());
+        }
+    }
     if let Some(account_combination_id) = &input.account_combination_id {
         let is_owned: Option<i64> = conn
             .query_row(
@@ -1225,9 +1435,9 @@ pub(crate) fn save_regression_config_record(
         .map_err(db_error)?;
     let id = existing_id.unwrap_or_else(|| Uuid::new_v4().to_string());
     conn.execute(
-        "INSERT INTO regression_configs(id, design_id, suite_id, account_combination_id, case_ids_json) VALUES(?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT(design_id) DO UPDATE SET suite_id=excluded.suite_id, account_combination_id=excluded.account_combination_id, case_ids_json=excluded.case_ids_json, updated_at=CURRENT_TIMESTAMP",
-        params![id, input.design_id, input.suite_id, input.account_combination_id, input.case_ids_json],
+        "INSERT INTO regression_configs(id, design_id, name, suite_id, account_combination_id, case_ids_json) VALUES(?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(design_id) DO UPDATE SET name=excluded.name, suite_id=excluded.suite_id, account_combination_id=excluded.account_combination_id, case_ids_json=excluded.case_ids_json, updated_at=CURRENT_TIMESTAMP",
+        params![id, input.design_id, input.name.trim(), input.suite_id, input.account_combination_id, input.case_ids_json],
     )
     .map_err(db_error)?;
     get_regression_config_record(conn, owner_id, &input.design_id)?
@@ -1266,6 +1476,12 @@ pub fn update_system(
 }
 
 #[tauri::command]
+pub fn delete_system(app: tauri::AppHandle, input: DeleteSystemInput) -> Result<(), String> {
+    let admin = crate::auth::require_admin()?;
+    delete_system_record(&mut crate::auth::open_db(&app)?, &admin.role, &input.id)
+}
+
+#[tauri::command]
 pub fn list_system_environments(
     app: tauri::AppHandle,
     system_id: String,
@@ -1290,6 +1506,12 @@ pub fn update_system_environment(
 ) -> Result<SystemEnvironment, String> {
     let admin = crate::auth::require_admin()?;
     update_environment_record(&crate::auth::open_db(&app)?, &admin.role, &input)
+}
+
+#[tauri::command]
+pub fn delete_system_environment(app: tauri::AppHandle, input: DeleteEnvironmentInput) -> Result<(), String> {
+    let admin = crate::auth::require_admin()?;
+    delete_environment_record(&crate::auth::open_db(&app)?, &admin.role, &input.id)
 }
 
 #[tauri::command]
@@ -1388,6 +1610,15 @@ pub fn update_design_case_status(
 ) -> Result<DesignTestCase, String> {
     let owner = crate::auth::current_user_id()?;
     update_design_case_status_record(&crate::auth::open_db(&app)?, &owner, &input)
+}
+
+#[tauri::command]
+pub fn update_design_test_case(
+    app: tauri::AppHandle,
+    input: UpdateDesignTestCaseInput,
+) -> Result<DesignTestCase, String> {
+    let owner = crate::auth::current_user_id()?;
+    update_design_test_case_record(&crate::auth::open_db(&app)?, &owner, &input)
 }
 
 #[tauri::command]

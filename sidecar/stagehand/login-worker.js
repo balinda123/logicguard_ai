@@ -2,11 +2,11 @@
 'use strict';
 
 const { createLocalStagehand } = require('./worker');
-const { executeCredentialLogin, verifyCredentialLogin } = require('./session');
+const { assessCredentialSession, executeCredentialLogin, verifyCredentialLogin } = require('./session');
 
 const ALLOWED_FIELDS = new Set([
-  'allowedOrigin', 'loginUrl', 'pageLocator', 'identityLocator', 'privateLocator',
-  'submitLocator', 'successLocator', 'username', 'password',
+  'allowedOrigin', 'handoffOrigins', 'loginUrl', 'pageLocator', 'identityLocator', 'privateLocator',
+  'submitLocator', 'successLocator', 'expectedAccountLabel', 'expectedSystemLabel', 'roleName', 'username', 'password',
 ]);
 
 function parsePayload(raw) {
@@ -26,14 +26,16 @@ async function runLoginWorker({ env = process.env, stagehand, output = process.s
   const raw = env.LOGICGUARD_LOGIN_PAYLOAD;
   delete env.LOGICGUARD_LOGIN_PAYLOAD;
   if (!raw) throw new Error('MISSING_LOGIN_PAYLOAD');
-  const mode = env.LOGICGUARD_LOGIN_MODE === 'verify' ? 'verify' : 'login';
+  const mode = ['assess', 'verify'].includes(env.LOGICGUARD_LOGIN_MODE) ? env.LOGICGUARD_LOGIN_MODE : 'login';
   const payload = parsePayload(raw);
   let instance;
   try {
     instance = stagehand || await createLocalStagehand({ env });
-    const data = mode === 'verify'
-      ? await verifyCredentialLogin(instance, payload)
-      : await executeCredentialLogin(instance, payload);
+    const data = mode === 'assess'
+      ? await assessCredentialSession(instance, payload)
+      : mode === 'verify'
+        ? await verifyCredentialLogin(instance, payload)
+        : await executeCredentialLogin(instance, payload);
     output.write(`${JSON.stringify({ ok: true, data })}\n`);
   } finally {
     clearPayload(payload);

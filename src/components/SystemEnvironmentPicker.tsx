@@ -100,7 +100,7 @@ export function SystemEnvironmentPicker({ value, onChange, canCreate = false }: 
         </select>
       </label>
       {value && <span className="mb-2 text-[11px] text-text-muted">{value.environment.baseUrl}</span>}
-      {!loading && systems.length === 0 && <p className="w-full text-xs text-text-muted">{canCreate ? '新建系统和首个环境后即可开始测试设计。' : '请联系管理员配置系统和环境。'}</p>}
+      {!loading && systems.length === 0 && <p className="w-full text-xs text-text-muted">{canCreate ? '新建系统和首个环境后即可开始设计测试。' : '请联系管理员配置系统和环境。'}</p>}
       {!loading && systems.length > 0 && !value && <p className="w-full text-xs text-text-muted">当前系统没有启用的环境，请由管理员在系统设置中补充。</p>}
       <QuickCreateSystemDialog
         open={dialogOpen}

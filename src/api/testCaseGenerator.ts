@@ -15,6 +15,8 @@ const TYPE_LABELS: Record<TestCaseType, string> = {
 
 const TYPE_ORDER: TestCaseType[] = ['normal', 'boundary', 'empty', 'permission', 'repeat', 'combination'];
 
+export type TestCaseGenerationPhase = 'requesting' | 'parsing';
+
 function pickString(item: any, keys: string[], fallback = ''): string {
   for (const key of keys) {
     const value = item?.[key];
@@ -51,13 +53,16 @@ function normalizeType(value: unknown, title: string, index: number): TestCaseTy
   return TYPE_ORDER[index % TYPE_ORDER.length];
 }
 
-function normalizeBusinessRole(value: unknown): BusinessRole | undefined {
-  const role = String(value ?? '').trim().toLowerCase();
-  if (role === 'employee' || role === 'manager' || role === 'hrbp') return role;
-  if (/员工|employee/.test(role)) return 'employee';
-  if (/上级|主管|经理|manager/.test(role)) return 'manager';
-  if (/hrbp|人力资源/.test(role)) return 'hrbp';
-  return undefined;
+function configuredAccountForStep(step: any, accounts: readonly TestAccount[]): TestAccount | undefined {
+  const accountId = pickString(step, ['accountId', 'account_id', '执行账号ID']);
+  if (accountId) return accounts.find((account) => account.enabled && account.id === accountId);
+  const actor = pickString(step, ['actorName', 'actor', 'role', 'actorRole', 'executorRole', '执行角色']);
+  if (!actor) return undefined;
+  const normalizedActor = actor.trim().toLocaleLowerCase();
+  const matches = accounts.filter((account) => account.enabled && [account.displayName, account.roleName, account.role]
+    .filter(Boolean)
+    .some((label) => normalizedActor.includes(String(label).trim().toLocaleLowerCase())));
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function genericTitle(type: TestCaseType, requirementTitle: string): string {
@@ -68,8 +73,8 @@ function buildPrompt(requirement: string, moduleName: string, flowAccounts: Test
   const enabledAccounts = flowAccounts.filter((account) => account.enabled);
   const workflowContext = enabledAccounts.length
     ? `\n\nWorkflow account context (metadata only; credentials are intentionally omitted):\n${enabledAccounts
-        .map((account) => `- ${account.role}: ${account.displayName} (accountId: ${account.id}, loginMode: ${account.loginMode})`)
-        .join('\n')}\n\nFor every case that needs a configured role, include the exact displayName in the step action. For cross-role processes, create a P0 combination case with explicit login switches in sequence, such as [employee] login -> submit -> [manager] login -> approve. Never invent credentials or include them in output.`
+        .map((account) => `- roleName=${account.roleName || account.role}; displayName=${account.displayName}; accountId=${account.id}; loginMode=${account.loginMode}`)
+        .join('\n')}\n\nEvery executable step must use one accountId from this list and copy its roleName into actorName. Decide which configured actor should perform each business action from the requirement. Do not create login steps: the executor assesses the page and logs in before the first business step or when accountId changes. Never invent roles, accounts or credentials.`
     : '';
   return `你是一名谨慎的人事系统测试工程师。请根据下面需求生成测试用例，必须覆盖正常流程、边界值、空值/异常值、权限校验、重复提交、多用户/多部门/多状态组合。
 
@@ -84,7 +89,7 @@ function buildPrompt(requirement: string, moduleName: string, flowAccounts: Test
   "riskPoint": "风险点",
   "preconditions": ["前置条件"],
   "testData": {"字段": "测试数据"},
-  "steps": [{"order": 1, "role": "employee|manager|hrbp", "action": "操作步骤", "expectedResult": "步骤预期"}],
+  "steps": [{"order": 1, "accountId": "配置中的账号ID", "actorName": "配置中的角色名称", "action": "业务操作步骤（不要写登录）", "expectedResult": "步骤预期", "assertions": [{"type": "text_contains|text_absent|url_contains", "expected": "页面上可直接校验的短文本或 URL 片段"}]}],
   "expectedResult": "总体预期结果"
   }]
 }
@@ -93,6 +98,14 @@ function buildPrompt(requirement: string, moduleName: string, flowAccounts: Test
 1. 测试数据不要使用真实员工信息，全部使用脱敏或虚构数据。
 2. 每个类型至少 1 条，总数控制在 6-10 条。
 3. 优先关注人事系统的权限、审批、重复提交、边界日期、薪资/身份证/手机号等敏感字段。
+4. testData 必须提供执行时可直接填写的具体业务值，步骤必须明确使用哪个数据；禁止输出 {{变量}}、\${变量}、TBD、待填写、字段名本身或“数据1”一类占位符。
+5. 目标内容、预期结果、评价意见、退回/终止说明等长文本必须是连贯、合理的虚构业务句子。例如目标可描述具体交付物，预期结果应包含可验收成果；禁止重复单字、连续数字、乱码或复制字段名凑长度。
+6. 边界测试数据要精确满足需求中的字符数，但仍保持业务语义；只有明确测试纯空白或特殊字符时才能使用异常文本。日期、比例、金额、权重等数值必须符合场景规则，多个目标的权重按页面规则合计。
+7. 多角色流程必须严格按需求中的状态流转排序。某角色提交后若状态进入另一角色待办，下一步必须切换到该角色完成必要处理；流程之后回到原角色时，要再次写出该角色步骤，不能把目标填写、自评、上级评价等不同阶段连续压在同一个角色步骤中。
+8. 每个步骤只描述当前角色在当前业务状态下可完成的一项操作。即使是为了衔接后续校验，也要补齐“上级确认目标”等必要过渡步骤；不要假设执行器会自行猜测缺失的业务动作。
+9. 边界用例应在同一可编辑阶段依次覆盖最小值前一位、最小值、最大值和最大值后一位：非法值验证拦截后继续修正，合法值可保存草稿验证；只有所有本阶段检查完成后才正式提交一次。页面支持多行时可在同一次提交中放入不同合法边界行，但权重等合计必须合法。不要为了每个边界值反复正式提交不可逆流程。
+10. 除非需求或前置条件明确说明存在可重置夹具或独立测试记录，禁止虚构 HIS-T01、T-N01、“两条独立记录”等页面中并不存在的数据。互相冲突的终态操作要拆成不同用例，并明确各自需要全新或可重置的流程实例。
+11. assertions 只填写能够从页面 DOM 或 URL 直接判断的证据，例如明确的成功提示、校验文案、状态文字或 URL 片段；抽象业务描述不能伪装成断言。没有可靠证据时返回空数组。禁止用“操作成功”“符合预期”这类泛化文字充当断言。
 
 需求内容：
 ${requirement}${workflowContext}`;
@@ -106,7 +119,7 @@ function extractJson(raw: string): unknown {
     try {
       return JSON.parse(text);
     } catch {
-      // Some compatible gateways append explanatory text after the JSON value.
+      // 部分兼容网关会在 JSON 后追加解释文字，因此完整解析失败后再提取第一个闭合的 JSON 值。
     }
 
     for (let start = 0; start < text.length; start += 1) {
@@ -181,7 +194,8 @@ function extractJson(raw: string): unknown {
   throw new Error('AI 返回 JSON 中找不到测试用例数组');
 }
 
-export function fallbackCases(requirement: string, moduleName: string, _flowAccounts: TestAccount[] = []): TestCase[] {
+export function fallbackCases(requirement: string, moduleName: string, flowAccounts: TestAccount[] = []): TestCase[] {
+  void flowAccounts;
   const now = new Date().toISOString();
   const requirementTitle = requirement.split(/\r?\n/).find(Boolean)?.slice(0, 40) || `${moduleName}需求`;
   const types: TestCaseType[] = ['normal', 'boundary', 'empty', 'permission', 'repeat', 'combination'];
@@ -196,9 +210,9 @@ export function fallbackCases(requirement: string, moduleName: string, _flowAcco
     riskPoint: type === 'permission' ? '越权访问或误操作员工敏感数据' : '流程遗漏导致发版后业务异常',
     preconditions: ['已登录测试环境', '使用脱敏测试账号和测试数据'],
     testData: {
-      员工: '员工A',
-      部门: '部门_1',
-      手机号: '手机号_1',
+      员工: '测试员工陈晓宁',
+      部门: '产品研发测试部',
+      手机号: '13800001234',
     },
     steps: [
       { order: 1, action: `进入${moduleName}相关页面`, expectedResult: '页面正常打开且无权限异常' },
@@ -218,14 +232,21 @@ export async function generateTestCasesFromRequirement(
   requirement: string,
   moduleName: string,
   flowAccounts: TestAccount[] = [],
+  onProgress?: (phase: TestCaseGenerationPhase) => void,
 ): Promise<TestCase[]> {
+  // 这是前端进入模型调用链前的第一道数据边界：先脱敏原始需求，再构造提示词；
+  // 账号只传非敏感元数据，真实凭据始终由 Rust 从系统凭据库读取。
   const cleanRequirement = sanitizeForLlm(requirement.trim());
   const prompt = buildPrompt(cleanRequirement, moduleName.trim() || '人事系统', flowAccounts);
   try {
+    onProgress?.('requesting');
+    // invoke 不是 HTTP 请求，而是调用 lib.rs 中注册的同名 Tauri 命令；返回值仍是不可信的模型文本，
+    // 必须经过 extractJson 和后续字段归一化后，才能进入应用的 TestCase 数据结构。
     const raw = await invoke<string>('generate_test_cases', {
       prompt: sanitizeForLlm(prompt),
       config: getLlmConfig(),
     });
+    onProgress?.('parsing');
     const parsed = extractJson(raw);
     if (!Array.isArray(parsed)) throw new Error('AI 未返回数组');
     const now = new Date().toISOString();
@@ -243,12 +264,28 @@ export async function generateTestCasesFromRequirement(
       );
       const preconditions = pickArray(item, ['preconditions', 'pre_conditions', '前置条件']);
       const rawSteps = pickArray(item, ['steps', 'testSteps', '测试步骤', '步骤']);
-      const steps = rawSteps.map((step: any, index: number) => ({
+      const steps = rawSteps.map((step: any, index: number) => {
+        const account = configuredAccountForStep(step, flowAccounts);
+        const actorName = account?.roleName || pickString(step, ['actorName', 'actor', 'role', 'actorRole', 'executorRole', '执行角色']) || undefined;
+        const assertions = pickArray(step, ['assertions', 'checks', '断言', '页面断言'])
+          .map((assertion: any) => {
+            const assertionType = pickString(assertion, ['type', 'kind', '类型']);
+            const expected = pickString(assertion, ['expected', 'value', 'text', '预期']);
+            if (!['text_contains', 'text_absent', 'url_contains'].includes(assertionType) || !expected) return undefined;
+            return { type: assertionType as 'text_contains' | 'text_absent' | 'url_contains', expected: expected.slice(0, 500) };
+          })
+          .filter((assertion): assertion is NonNullable<typeof assertion> => Boolean(assertion))
+          .slice(0, 8);
+        return ({
         order: Number(step.order || step.step || step['序号'] || index + 1),
-        role: normalizeBusinessRole(step.role ?? step.actorRole ?? step.executorRole ?? step['执行角色']),
+        accountId: account?.id,
+        actorName,
+        role: (account?.role || actorName) as BusinessRole | undefined,
         action: pickString(step, ['action', 'description', 'step', '操作步骤', '步骤描述', '操作'], `按${TYPE_LABELS[type]}场景执行第 ${index + 1} 步`),
         expectedResult: pickString(step, ['expectedResult', 'expected_result', 'expected', '预期结果', '步骤预期'], '系统反馈符合预期'),
-      }));
+        assertions,
+      });
+      });
       return {
         id: `case_${crypto.randomUUID()}`,
         title: rawTitle && rawTitle !== '正常流程测试' ? rawTitle : genericTitle(type, requirementTitle),

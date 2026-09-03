@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
+use rusqlite::{params, Connection, ErrorCode, OptionalExtension, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -105,6 +105,8 @@ pub struct WorkflowRunSnapshot {
 pub struct LoginAutomationConfig {
     pub login_url: String,
     #[serde(default)]
+    pub handoff_origins: Vec<String>,
+    #[serde(default)]
     pub page_selector: Option<String>,
     #[serde(default)]
     pub username_selector: Option<String>,
@@ -122,6 +124,8 @@ pub struct TestAccount {
     pub id: String,
     pub display_name: String,
     pub business_role: String,
+    pub role_key: String,
+    pub role_name: String,
     pub masked_login_name: String,
     pub credential_ref: String,
     pub login_mode: String,
@@ -177,6 +181,10 @@ impl Drop for StoredCredentialPayload {
 pub struct CreateTestAccountInput {
     pub display_name: String,
     pub business_role: String,
+    #[serde(default)]
+    pub role_key: Option<String>,
+    #[serde(default)]
+    pub role_name: Option<String>,
     pub login_mode: String,
     pub login_config: LoginAutomationConfig,
 }
@@ -194,8 +202,19 @@ pub struct UpdateTestAccountInput {
     pub id: String,
     pub display_name: String,
     pub business_role: String,
+    #[serde(default)]
+    pub role_key: Option<String>,
+    #[serde(default)]
+    pub role_name: Option<String>,
     pub login_mode: String,
     pub login_config: LoginAutomationConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateScopedTestAccountInput {
+    pub scope: ScopeRef,
+    pub account: UpdateTestAccountInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -397,8 +416,21 @@ pub struct SaveDefectDraftInput {
     pub business_role: Option<String>,
 }
 
-fn db_error(_: rusqlite::Error) -> String {
-    "DATABASE_OPERATION_FAILED".to_string()
+fn db_error(error: rusqlite::Error) -> String {
+    if matches!(
+        error,
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked,
+                ..
+            },
+            _
+        )
+    ) {
+        "DATABASE_BUSY".to_string()
+    } else {
+        format!("DATABASE_OPERATION_FAILED: {error}")
+    }
 }
 
 fn required(value: &str, field: &str) -> Result<(), String> {
@@ -613,6 +645,23 @@ fn validate_login_config(config: &LoginAutomationConfig) -> Result<(), String> {
     {
         return Err("INVALID_LOGIN_URL".to_string());
     }
+    if config.handoff_origins.len() > 8 {
+        return Err("INVALID_HANDOFF_ORIGINS".to_string());
+    }
+    let mut handoff_origins = std::collections::HashSet::new();
+    for origin in &config.handoff_origins {
+        let parsed = reqwest::Url::parse(origin).map_err(|_| "INVALID_HANDOFF_ORIGINS".to_string())?;
+        let host = parsed.host_str().unwrap_or_default();
+        let allowed_scheme = parsed.scheme() == "https"
+            || (parsed.scheme() == "http" && matches!(host, "localhost" | "127.0.0.1" | "::1"));
+        // SSO 白名单只保存 origin，禁止路径、查询参数和凭据扩大人工接管的信任范围。
+        if !allowed_scheme || !parsed.username().is_empty() || parsed.password().is_some()
+            || parsed.path() != "/" || parsed.query().is_some() || parsed.fragment().is_some()
+            || !handoff_origins.insert(parsed.origin().ascii_serialization())
+        {
+            return Err("INVALID_HANDOFF_ORIGINS".to_string());
+        }
+    }
     validate_optional_selector(&config.page_selector, "PAGE_SELECTOR")?;
     validate_optional_selector(&config.username_selector, "USERNAME_SELECTOR")?;
     validate_optional_selector(&config.password_selector, "PASSWORD_SELECTOR")?;
@@ -676,6 +725,8 @@ fn read_test_account(row: &Row<'_>) -> rusqlite::Result<TestAccount> {
         id: row.get(0)?,
         display_name: row.get(1)?,
         business_role: row.get(2)?,
+        role_key: row.get(13)?,
+        role_name: row.get(14)?,
         masked_login_name: row.get(3)?,
         credential_ref: row.get(4)?,
         login_mode: row.get(5)?,
@@ -812,6 +863,8 @@ pub(crate) fn initialize_schema(conn: &Connection) -> Result<(), String> {
            id TEXT PRIMARY KEY,
            display_name TEXT NOT NULL,
            business_role TEXT NOT NULL CHECK(business_role IN ('employee','manager','hrbp')),
+           role_key TEXT NOT NULL DEFAULT 'employee',
+           role_name TEXT NOT NULL DEFAULT '员工',
            masked_login_name TEXT NOT NULL,
            credential_ref TEXT NOT NULL,
            login_mode TEXT NOT NULL CHECK(login_mode IN ('automatic','manual_sso','manual_otp')),
@@ -922,6 +975,13 @@ pub(crate) fn initialize_schema(conn: &Connection) -> Result<(), String> {
          CREATE INDEX IF NOT EXISTS idx_defect_drafts_owner_status ON defect_drafts(owner_id, status);",
     )
     .map_err(db_error)?;
+    // 新执行链路使用动态角色；保留 business_role 只为兼容旧组合表，避免重建被多表引用的账号表。
+    let _ = conn.execute("ALTER TABLE test_accounts ADD COLUMN role_key TEXT NOT NULL DEFAULT 'employee'", []);
+    let _ = conn.execute("ALTER TABLE test_accounts ADD COLUMN role_name TEXT NOT NULL DEFAULT '员工'", []);
+    conn.execute(
+        "UPDATE test_accounts SET role_key=business_role, role_name=CASE business_role WHEN 'employee' THEN '员工' WHEN 'manager' THEN '上级' WHEN 'hrbp' THEN 'HRBP' ELSE business_role END WHERE role_key='employee' AND business_role!='employee'",
+        [],
+    ).map_err(db_error)?;
 
     for (table, columns) in [
         (
@@ -1018,9 +1078,22 @@ pub(crate) fn ensure_admin_role(role: &str) -> Result<(), String> {
 
 fn validate_test_account_input(input: &CreateTestAccountInput) -> Result<(), String> {
     required(&input.display_name, "DISPLAY_NAME")?;
-    allowed(&input.business_role, BUSINESS_ROLES, "BUSINESS_ROLE")?;
+    validate_untrusted_text(&effective_role_key(input), 64, "ROLE_KEY")?;
+    validate_untrusted_text(&effective_role_name(input), 80, "ROLE_NAME")?;
     allowed(&input.login_mode, LOGIN_MODES, "LOGIN_MODE")?;
     validate_login_config(&input.login_config)
+}
+
+fn effective_role_key(input: &CreateTestAccountInput) -> String {
+    input.role_key.as_deref().unwrap_or(&input.business_role).trim().to_string()
+}
+
+fn effective_role_name(input: &CreateTestAccountInput) -> String {
+    input.role_name.as_deref().unwrap_or_else(|| input.role_key.as_deref().unwrap_or(&input.business_role)).trim().to_string()
+}
+
+fn legacy_business_role(role_key: &str) -> &str {
+    if BUSINESS_ROLES.contains(&role_key) { role_key } else { "employee" }
 }
 
 pub(crate) fn create_test_account_record(
@@ -1035,9 +1108,9 @@ pub(crate) fn create_test_account_record(
     let login_config_json = serde_json::to_string(&input.login_config)
         .map_err(|_| "INVALID_LOGIN_CONFIG".to_string())?;
     conn.execute(
-        "INSERT INTO test_accounts(id, display_name, business_role, masked_login_name, credential_ref, login_mode, login_config_json)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![id, input.display_name.trim(), input.business_role, NOT_CONFIGURED_MASK, credential_ref, input.login_mode, login_config_json],
+        "INSERT INTO test_accounts(id, display_name, business_role, role_key, role_name, masked_login_name, credential_ref, login_mode, login_config_json)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![id, input.display_name.trim(), legacy_business_role(&effective_role_key(input)), effective_role_key(input), effective_role_name(input), NOT_CONFIGURED_MASK, credential_ref, input.login_mode, login_config_json],
     )
     .map_err(db_error)?;
     get_test_account(conn, &id)
@@ -1075,9 +1148,9 @@ pub(crate) fn create_scoped_test_account_record(
     let login_config_json = serde_json::to_string(&input.account.login_config)
         .map_err(|_| "INVALID_LOGIN_CONFIG".to_string())?;
     conn.execute(
-        "INSERT INTO test_accounts(id, display_name, business_role, masked_login_name, credential_ref, login_mode, login_config_json, owner_id, system_id, environment_id, scope_state)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'scoped')",
-        params![id, input.account.display_name.trim(), input.account.business_role, NOT_CONFIGURED_MASK, credential_ref, input.account.login_mode, login_config_json, owner_id, input.scope.system_id, input.scope.environment_id],
+        "INSERT INTO test_accounts(id, display_name, business_role, role_key, role_name, masked_login_name, credential_ref, login_mode, login_config_json, owner_id, system_id, environment_id, scope_state)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'scoped')",
+        params![id, input.account.display_name.trim(), legacy_business_role(&effective_role_key(&input.account)), effective_role_key(&input.account), effective_role_name(&input.account), NOT_CONFIGURED_MASK, credential_ref, input.account.login_mode, login_config_json, owner_id, input.scope.system_id, input.scope.environment_id],
     )
     .map_err(db_error)?;
     get_test_account(conn, &id)
@@ -1085,7 +1158,7 @@ pub(crate) fn create_scoped_test_account_record(
 
 fn get_test_account(conn: &Connection, id: &str) -> Result<TestAccount, String> {
     conn.query_row(
-        "SELECT id, display_name, business_role, masked_login_name, credential_ref, login_mode, login_config_json, is_enabled, system_id, environment_id, scope_state, created_at, updated_at FROM test_accounts WHERE id=?1",
+        "SELECT id, display_name, business_role, masked_login_name, credential_ref, login_mode, login_config_json, is_enabled, system_id, environment_id, scope_state, created_at, updated_at, role_key, role_name FROM test_accounts WHERE id=?1",
         [id],
         read_test_account,
     )
@@ -1096,10 +1169,35 @@ fn get_test_account(conn: &Connection, id: &str) -> Result<TestAccount, String> 
 
 pub(crate) fn list_test_accounts_record(conn: &Connection) -> Result<Vec<TestAccount>, String> {
     let mut statement = conn
-        .prepare("SELECT id, display_name, business_role, masked_login_name, credential_ref, login_mode, login_config_json, is_enabled, system_id, environment_id, scope_state, created_at, updated_at FROM test_accounts ORDER BY is_enabled DESC, business_role, display_name")
+        .prepare("SELECT id, display_name, business_role, masked_login_name, credential_ref, login_mode, login_config_json, is_enabled, system_id, environment_id, scope_state, created_at, updated_at, role_key, role_name FROM test_accounts ORDER BY is_enabled DESC, role_name, display_name")
         .map_err(db_error)?;
     let result = statement
         .query_map([], read_test_account)
+        .map_err(db_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(db_error);
+    result
+}
+
+pub(crate) fn list_scoped_test_accounts_record(
+    conn: &Connection,
+    owner_id: &str,
+    scope: &ScopeRef,
+) -> Result<Vec<TestAccount>, String> {
+    validate_scope(conn, scope)?;
+    let mut statement = conn
+        .prepare(
+            "SELECT id, display_name, business_role, masked_login_name, credential_ref, login_mode, login_config_json, is_enabled, system_id, environment_id, scope_state, created_at, updated_at, role_key, role_name
+             FROM test_accounts
+             WHERE owner_id=?1 AND system_id=?2 AND environment_id=?3 AND scope_state='scoped'
+             ORDER BY is_enabled DESC, role_name, display_name",
+        )
+        .map_err(db_error)?;
+    let result = statement
+        .query_map(
+            params![owner_id, scope.system_id, scope.environment_id],
+            read_test_account,
+        )
         .map_err(db_error)?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(db_error);
@@ -1115,6 +1213,8 @@ pub(crate) fn update_test_account_record(
     validate_test_account_input(&CreateTestAccountInput {
         display_name: input.display_name.clone(),
         business_role: input.business_role.clone(),
+        role_key: input.role_key.clone(),
+        role_name: input.role_name.clone(),
         login_mode: input.login_mode.clone(),
         login_config: input.login_config.clone(),
     })?;
@@ -1122,14 +1222,56 @@ pub(crate) fn update_test_account_record(
         .map_err(|_| "INVALID_LOGIN_CONFIG".to_string())?;
     let changed = conn
         .execute(
-            "UPDATE test_accounts SET display_name=?1, business_role=?2, login_mode=?3, login_config_json=?4, updated_at=CURRENT_TIMESTAMP WHERE id=?5 AND scope_state='legacy'",
-            params![input.display_name.trim(), input.business_role, input.login_mode, login_config_json, input.id],
+            "UPDATE test_accounts SET display_name=?1, business_role=?2, role_key=?3, role_name=?4, login_mode=?5, login_config_json=?6, updated_at=CURRENT_TIMESTAMP WHERE id=?7 AND scope_state='legacy'",
+            params![input.display_name.trim(), legacy_business_role(&input.role_key.clone().unwrap_or_else(||input.business_role.clone())), input.role_key.clone().unwrap_or_else(||input.business_role.clone()), input.role_name.clone().unwrap_or_else(||input.business_role.clone()), input.login_mode, login_config_json, input.id],
         )
         .map_err(db_error)?;
     if changed == 0 {
         return Err("NOT_FOUND".to_string());
     }
     get_test_account(conn, &input.id)
+}
+
+pub(crate) fn update_scoped_test_account_record(
+    conn: &Connection,
+    actor_role: &str,
+    owner_id: &str,
+    input: &UpdateScopedTestAccountInput,
+) -> Result<TestAccount, String> {
+    ensure_admin_role(actor_role)?;
+    validate_scope(conn, &input.scope)?;
+    validate_test_account_input(&CreateTestAccountInput {
+        display_name: input.account.display_name.clone(),
+        business_role: input.account.business_role.clone(),
+        role_key: input.account.role_key.clone(),
+        role_name: input.account.role_name.clone(),
+        login_mode: input.account.login_mode.clone(),
+        login_config: input.account.login_config.clone(),
+    })?;
+    let login_config_json = serde_json::to_string(&input.account.login_config)
+        .map_err(|_| "INVALID_LOGIN_CONFIG".to_string())?;
+    let changed = conn
+        .execute(
+            "UPDATE test_accounts SET display_name=?1, business_role=?2, role_key=?3, role_name=?4, login_mode=?5, login_config_json=?6, updated_at=CURRENT_TIMESTAMP
+             WHERE id=?7 AND owner_id=?8 AND system_id=?9 AND environment_id=?10 AND scope_state='scoped'",
+            params![
+                input.account.display_name.trim(),
+                legacy_business_role(&input.account.role_key.clone().unwrap_or_else(||input.account.business_role.clone())),
+                input.account.role_key.clone().unwrap_or_else(||input.account.business_role.clone()),
+                input.account.role_name.clone().unwrap_or_else(||input.account.business_role.clone()),
+                input.account.login_mode,
+                login_config_json,
+                input.account.id,
+                owner_id,
+                input.scope.system_id,
+                input.scope.environment_id,
+            ],
+        )
+        .map_err(db_error)?;
+    if changed == 0 {
+        return Err("NOT_FOUND".to_string());
+    }
+    get_test_account(conn, &input.account.id)
 }
 
 pub(crate) fn update_masked_login_name_after_credential_write(
@@ -1168,7 +1310,7 @@ pub(crate) fn load_automatic_login_for_snapshot(
     if account.scope_state != "scoped"
         || account.system_id.as_deref() != Some(system_id)
         || account.environment_id.as_deref() != Some(environment_id)
-        || account.business_role != role
+        || account.role_key != role
         || account.login_mode != expected_login_mode
     {
         return Err("ACCOUNT_SNAPSHOT_MISMATCH".to_string());
@@ -2099,6 +2241,16 @@ pub fn list_test_accounts(app: tauri::AppHandle) -> Result<Vec<TestAccount>, Str
 }
 
 #[tauri::command]
+pub fn list_scoped_test_accounts(
+    app: tauri::AppHandle,
+    scope: ScopeRef,
+) -> Result<Vec<TestAccount>, String> {
+    let owner_id = crate::auth::current_user_id()?;
+    let conn = crate::auth::open_db(&app)?;
+    list_scoped_test_accounts_record(&conn, &owner_id, &scope)
+}
+
+#[tauri::command]
 pub fn create_test_account(
     app: tauri::AppHandle,
     input: CreateTestAccountInput,
@@ -2126,6 +2278,16 @@ pub fn update_test_account(
     let admin = crate::auth::require_admin()?;
     let conn = crate::auth::open_db(&app)?;
     update_test_account_record(&conn, &admin.role, &input)
+}
+
+#[tauri::command]
+pub fn update_scoped_test_account(
+    app: tauri::AppHandle,
+    input: UpdateScopedTestAccountInput,
+) -> Result<TestAccount, String> {
+    let admin = crate::auth::require_admin()?;
+    let conn = crate::auth::open_db(&app)?;
+    update_scoped_test_account_record(&conn, &admin.role, &admin.id, &input)
 }
 
 #[tauri::command]

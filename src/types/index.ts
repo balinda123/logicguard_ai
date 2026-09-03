@@ -167,10 +167,20 @@ export type TestCaseStatus = 'draft' | 'confirmed' | 'archived';
 
 export interface TestCaseStep {
   order: number;
-  /** Kept from the scenario template so workflow conversion does not lose account handoffs. */
+  /** 保留场景角色，确保转换为执行计划时不会丢失账号交接。 */
   role?: BusinessRole;
+  /** AI 只能绑定当前系统中已配置的非敏感账号 ID。 */
+  accountId?: string;
+  actorName?: string;
   action: string;
   expectedResult: string;
+  /** 页面动作后从实时 DOM/URL 校验的确定性证据，不调用模型猜测结果。 */
+  assertions?: TestStepAssertion[];
+}
+
+export interface TestStepAssertion {
+  type: 'text_contains' | 'text_absent' | 'url_contains';
+  expected: string;
 }
 
 export interface TestCase {

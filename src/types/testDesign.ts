@@ -13,6 +13,8 @@ export interface SystemEnvironment {
   kind: EnvironmentKind
   name: string
   baseUrl: string
+  loginUrl: string
+  handoffOrigins: string[]
   isEnabled: boolean
   createdAt: string
   updatedAt: string
@@ -75,6 +77,7 @@ export interface ReviewRecord {
 export interface RegressionConfig {
   id: string
   designId: string
+  name: string
   suiteId?: string
   accountCombinationId?: string
   caseIdsJson: string
@@ -92,6 +95,8 @@ export interface CreateEnvironmentInput {
   kind: EnvironmentKind
   name: string
   baseUrl: string
+  loginUrl: string
+  handoffOrigins: string[]
 }
 
 export interface CreateSystemWithEnvironmentInput {
@@ -99,6 +104,8 @@ export interface CreateSystemWithEnvironmentInput {
   kind: EnvironmentKind
   environmentName: string
   baseUrl: string
+  loginUrl: string
+  handoffOrigins: string[]
 }
 
 export interface SystemEnvironmentScope {
@@ -109,6 +116,14 @@ export interface SystemEnvironmentScope {
 export interface UpdateEnvironmentInput extends CreateEnvironmentInput {
   id: string
   isEnabled: boolean
+}
+
+export interface DeleteSystemInput {
+  id: string
+}
+
+export interface DeleteEnvironmentInput {
+  id: string
 }
 
 export interface CreateTestDesignInput {
@@ -148,6 +163,12 @@ export interface UpdateDesignCaseStatusInput {
   status: 'draft' | 'confirmed' | 'archived'
 }
 
+export interface UpdateDesignTestCaseInput {
+  designId: string
+  caseId: string
+  payload: Record<string, unknown>
+}
+
 export interface CreateReviewRecordInput {
   designId: string
   generationBatchId: string
@@ -157,6 +178,7 @@ export interface CreateReviewRecordInput {
 
 export interface CreateRegressionConfigInput {
   designId: string
+  name: string
   suiteId?: string
   accountCombinationId?: string
   caseIdsJson: string

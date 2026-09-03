@@ -2,14 +2,14 @@ use serde::{Deserialize, Serialize};
 use tauri::command;
 
 // =============================================
-// Types for LLM request/response
+// 模型请求与响应类型
 // =============================================
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LlmConfig {
     pub provider: String, // "gemini" | "ollama" | "openai_compat"
     pub api_key: Option<String>,
-    pub base_url: Option<String>, // for custom OpenAI-compat endpoints
+    pub base_url: Option<String>, // 自定义 OpenAI 兼容接口地址
     pub model: String,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
@@ -85,7 +85,7 @@ pub async fn call_gemini(
             }],
         }],
         generation_config: GeminiGenerationConfig {
-            temperature: 0.1, // low temperature for structured JSON output
+            temperature: 0.1, // 降低随机性，让结构化 JSON 输出更稳定。
             max_output_tokens: 4096,
             response_mime_type: "application/json".to_string(),
         },
@@ -226,26 +226,45 @@ async fn request_openai_compat(
     api_key: &str,
     body: &serde_json::Value,
 ) -> Result<String, String> {
-    let response = client
-        .post(url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(body)
-        .send()
-        .await
-        .map_err(|error| format!("API HTTP error: {}", error))?;
+    const MAX_ATTEMPTS: usize = 3;
+    // 只重试通常由网关或上游服务暂时不可用导致的 502/503/504；
+    // 参数错误、鉴权失败等确定性错误应立即返回，避免重复请求和额外 Token 消耗。
+    for attempt in 0..MAX_ATTEMPTS {
+        let response = client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(body)
+            .send()
+            .await
+            .map_err(|error| format!("API HTTP error: {}", error))?;
 
-    let status = response.status();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    let response_body = response
-        .text()
-        .await
-        .map_err(|error| format!("API response read error: {}", error))?;
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let response_body = response
+            .text()
+            .await
+            .map_err(|error| format!("API response read error: {}", error))?;
 
-    parse_openai_compat_response(status, content_type.as_deref(), &response_body)
+        if matches!(status.as_u16(), 502 | 503 | 504) && attempt + 1 < MAX_ATTEMPTS {
+            tokio::time::sleep(std::time::Duration::from_millis(400 * (attempt as u64 + 1))).await;
+            continue;
+        }
+        return parse_openai_compat_response(status, content_type.as_deref(), &response_body);
+    }
+    unreachable!("OpenAI-compatible request loop always returns")
+}
+
+fn openai_chat_completions_url(base_url: &str) -> String {
+    let normalized = base_url.trim_end_matches('/');
+    if normalized.ends_with("/v1") {
+        format!("{}/chat/completions", normalized)
+    } else {
+        format!("{}/v1/chat/completions", normalized)
+    }
 }
 
 fn parse_openai_compat_model_ids(body: &str) -> Result<Vec<String>, String> {
@@ -317,8 +336,7 @@ pub async fn call_openai_compat(
     reasoning_effort: Option<&str>,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
-    let normalized_base_url = base_url.trim_end_matches('/');
-    let url = format!("{}/chat/completions", normalized_base_url);
+    let url = openai_chat_completions_url(base_url);
 
     let mut body = serde_json::json!({
         "model": model,
@@ -335,24 +353,7 @@ pub async fn call_openai_compat(
         );
     }
 
-    match request_openai_compat(&client, &url, api_key, &body).await {
-        Ok(text) => Ok(text),
-        Err(primary_error)
-            if primary_error.starts_with(NON_JSON_RESPONSE_PREFIX)
-                && !normalized_base_url.ends_with("/v1") =>
-        {
-            let v1_url = format!("{}/v1/chat/completions", normalized_base_url);
-            request_openai_compat(&client, &v1_url, api_key, &body)
-                .await
-                .map_err(|fallback_error| {
-                    format!(
-                        "{}; retrying {} failed: {}",
-                        primary_error, v1_url, fallback_error
-                    )
-                })
-        }
-        Err(error) => Err(error),
-    }
+    request_openai_compat(&client, &url, api_key, &body).await
 }
 
 #[cfg(test)]
@@ -380,7 +381,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(models, vec!["company-gpt-4o", "company-gpt-4.1-mini"]);
+        assert_eq!(models, vec!["company-gpt-4.1-mini", "company-gpt-4o"]);
     }
 
     #[test]
@@ -390,6 +391,18 @@ mod tests {
         assert!(!should_send_reasoning_effort("gpt-4o", Some("high")));
         assert!(!should_send_reasoning_effort("gpt-5.6-luna", None));
     }
+
+    #[test]
+    fn normalizes_openai_compatible_chat_completion_urls() {
+        assert_eq!(
+            openai_chat_completions_url("http://10.255.240.106:9019"),
+            "http://10.255.240.106:9019/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_completions_url("http://10.255.240.106:9019/v1/"),
+            "http://10.255.240.106:9019/v1/chat/completions"
+        );
+    }
 }
 
 // =============================================
@@ -397,6 +410,8 @@ mod tests {
 // =============================================
 
 pub async fn route_llm(prompt: &str, config: &LlmConfig) -> Result<String, String> {
+    // 所有 Tauri 模型命令都汇聚到这里，保证 Provider 选择、API Key 获取和错误返回规则一致。
+    // API Key 缺省时从当前登录用户的系统凭据库读取，而不是信任前端持久化明文。
     match config.provider.as_str() {
         "gemini" => {
             let api_key = config.api_key.clone().map(Ok)
@@ -434,33 +449,34 @@ pub async fn route_llm(prompt: &str, config: &LlmConfig) -> Result<String, Strin
 // Tauri Commands (exposed to frontend)
 // =============================================
 
-/// Test LLM connectivity and return raw response
+/// 测试模型连接，并把模型原始文本返回给前端。
 #[command]
 pub async fn test_llm_connection(config: LlmConfig) -> Result<String, String> {
     let test_prompt = r#"请只回复这个 JSON，不要输出其他内容：{"status":"ok","message":"模型连接成功"}"#;
     route_llm(test_prompt, &config).await
 }
 
-/// Main planning command: converts user intent to structured steps
+/// 把用户意图和页面上下文规划成结构化步骤。
 #[command]
 pub async fn plan_task(user_intent: String, context: String, config: LlmConfig) -> Result<String, String> {
     let system_prompt = build_planner_prompt(&user_intent, &context);
     route_llm(&system_prompt, &config).await
 }
 
-/// Generate a scenario template without applying the browser planner protocol.
+/// 生成场景模板，不套用浏览器规划协议。
 #[command]
 pub async fn generate_template(prompt: String, config: LlmConfig) -> Result<String, String> {
     route_llm(&prompt, &config).await
 }
 
-/// Generate test cases without applying the browser planner protocol.
+/// 接收前端已经构造并脱敏的提示词，生成测试用例原始文本。
+/// 结构解析仍由前端负责，因此这里不把模型文本当作可信业务对象。
 #[command]
 pub async fn generate_test_cases(prompt: String, config: LlmConfig) -> Result<String, String> {
     route_llm(&prompt, &config).await
 }
 
-/// Generate action for a specific step given DOM context
+/// 根据具体步骤和 DOM 上下文生成页面动作。
 #[command]
 pub async fn generate_action(
     step_description: String,
@@ -471,7 +487,7 @@ pub async fn generate_action(
     route_llm(&prompt, &config).await
 }
 
-/// Heal a failed step: re-analyze with current DOM
+/// 步骤失败后结合最新 DOM 重新分析。
 #[command]
 pub async fn heal_step(
     step_description: String,

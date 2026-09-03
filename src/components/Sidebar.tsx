@@ -1,6 +1,7 @@
 import React from 'react';
 import { LayoutDashboard, BarChart2, Settings, Terminal, ShieldAlert, Cpu, ClipboardList, ListChecks, Bug } from 'lucide-react';
 import type { SystemStatus } from '../types';
+import { USER_COPY } from '../constants/userFacingCopy';
 
 interface SidebarProps {
   activeTab: string;
@@ -11,8 +12,8 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, status }) => {
   const menuItems = [
     { id: 'dashboard', label: '任务控制台', icon: LayoutDashboard },
-    { id: 'testdesign', label: '测试设计', icon: ClipboardList },
-    { id: 'execution', label: '执行中心', icon: ListChecks },
+    { id: 'testdesign', label: USER_COPY.designTests, icon: ClipboardList },
+    { id: 'execution', label: USER_COPY.testRuns, icon: ListChecks },
     { id: 'reports', label: '测试报告', icon: BarChart2 },
     { id: 'issues', label: '问题跟踪', icon: Bug },
     { id: 'settings', label: '系统设置', icon: Settings },

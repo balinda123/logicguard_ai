@@ -13,7 +13,7 @@ const MAX_TEXT_LENGTH = 4096;
 const MAX_ORIGINS = 20;
 const COMMAND_VALUES = Object.freeze([
   'execute', 'observe', 'act', 'agent', 'set_control_marker', 'remove_control_marker',
-  'terminate', 'self_check',
+  'assert_page', 'capture_requirement', 'terminate', 'self_check',
 ]);
 const ERROR_CATEGORY_VALUES = Object.freeze([
   'invalid_request',
@@ -82,10 +82,12 @@ function normalizeTimeout(value) {
 }
 
 const REQUEST_FIELDS = Object.freeze({
-  execute: new Set(['id', 'command', 'step']),
+  execute: new Set(['id', 'command', 'step', 'allowedOrigins', 'timeoutMs']),
   observe: new Set(['id', 'command', 'instruction']),
-  act: new Set(['id', 'command', 'instruction', 'allowedOrigins', 'timeoutMs']),
+  act: new Set(['id', 'command', 'instruction', 'fallbackGoal', 'maxActions', 'allowedOrigins', 'timeoutMs']),
   agent: new Set(['id', 'command', 'goal', 'allowedOrigins', 'maxActions', 'timeoutMs']),
+  assert_page: new Set(['id', 'command', 'assertions', 'allowedOrigins', 'timeoutMs']),
+  capture_requirement: new Set(['id', 'command', 'url', 'keyword', 'aiMatch', 'allowedOrigins']),
   set_control_marker: new Set(['id', 'command', 'marker']),
   remove_control_marker: new Set(['id', 'command']),
   terminate: new Set(['id', 'command']),
@@ -116,10 +118,19 @@ function parseRequest(line) {
   };
   if (input.command === 'execute') {
     request.step = compileStep(input.step);
+    request.allowedOrigins = normalizeOrigins(input.allowedOrigins);
+    request.timeoutMs = normalizeTimeout(input.timeoutMs);
   } else if (input.command === 'observe') {
     request.instruction = requiredString(input.instruction, 'INVALID_INSTRUCTION');
   } else if (input.command === 'act') {
     request.instruction = requiredString(input.instruction, 'INVALID_INSTRUCTION');
+    if (input.fallbackGoal !== undefined) {
+      request.fallbackGoal = requiredString(input.fallbackGoal, 'INVALID_FALLBACK_GOAL');
+      if (!Number.isInteger(input.maxActions) || input.maxActions < 1 || input.maxActions > 8) fail('INVALID_MAX_ACTIONS');
+      request.maxActions = input.maxActions;
+    } else if (input.maxActions !== undefined) {
+      fail('UNKNOWN_REQUEST_FIELD');
+    }
     request.allowedOrigins = normalizeOrigins(input.allowedOrigins);
     request.timeoutMs = normalizeTimeout(input.timeoutMs);
   } else if (input.command === 'agent') {
@@ -130,6 +141,27 @@ function parseRequest(line) {
     }
     request.maxActions = input.maxActions;
     request.timeoutMs = normalizeTimeout(input.timeoutMs);
+  } else if (input.command === 'assert_page') {
+    if (!Array.isArray(input.assertions) || input.assertions.length < 1 || input.assertions.length > 8) {
+      fail('INVALID_PAGE_ASSERTIONS');
+    }
+    request.assertions = input.assertions.map(assertion => {
+      if (!isPlainObject(assertion)) fail('INVALID_PAGE_ASSERTION');
+      assertKnownFields(assertion, new Set(['type', 'expected']));
+      if (!['text_contains', 'text_absent', 'url_contains'].includes(assertion.type)) fail('INVALID_PAGE_ASSERTION_TYPE');
+      return {
+        type: assertion.type,
+        expected: requiredString(assertion.expected, 'INVALID_PAGE_ASSERTION_EXPECTED', 500),
+      };
+    });
+    request.allowedOrigins = normalizeOrigins(input.allowedOrigins);
+    request.timeoutMs = normalizeTimeout(input.timeoutMs);
+  } else if (input.command === 'capture_requirement') {
+    request.url = requiredString(input.url, 'INVALID_REQUIREMENT_URL');
+    request.keyword = typeof input.keyword === 'string' ? input.keyword.trim().slice(0, MAX_TEXT_LENGTH) : '';
+    if (input.aiMatch !== undefined && typeof input.aiMatch !== 'boolean') fail('INVALID_AI_MATCH');
+    request.aiMatch = input.aiMatch === true;
+    request.allowedOrigins = normalizeOrigins(input.allowedOrigins);
   } else if (input.command === 'set_control_marker') {
     if (!isPlainObject(input.marker)) fail('INVALID_CONTROL_MARKER');
     assertKnownFields(input.marker, new Set(['system', 'environment', 'run', 'currentStep']));

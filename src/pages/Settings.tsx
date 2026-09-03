@@ -8,7 +8,6 @@ import { createUser, disableUser, getCredentialStatus, listUsers, resetUserPassw
 import { getCdpPort, setCdpPort as saveCdpPort } from '../api/browserBridge';
 import { getDataSecurityConfig, setDataSecurityConfig, securityModeLabel } from '../utils/privacy';
 import type { DataSecurityConfig, DataSecurityMode } from '../types';
-import { TestAccountsPanel } from '../components/TestAccountsPanel';
 import { SystemEnvironmentManager } from '../components/SystemEnvironmentManager';
 
 interface SettingsProps {
@@ -28,7 +27,7 @@ interface ProviderPreset {
   apiKeyPlaceholder: string;
 }
 
-export const PROVIDER_PRESETS: ProviderPreset[] = [
+const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: 'deepseek',
     label: 'DeepSeek（推荐 / OpenAI 兼容）',
@@ -110,7 +109,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
 ];
 
-export const REASONING_EFFORT_OPTIONS = [
+const REASONING_EFFORT_OPTIONS = [
   { value: '', label: '自动（不发送参数）' },
   { value: 'low', label: '低' },
   { value: 'medium', label: '中' },
@@ -118,14 +117,10 @@ export const REASONING_EFFORT_OPTIONS = [
   { value: 'xhigh', label: '极高' },
 ] as const;
 
-export function gatewayModelOptions(models: string[]) {
+function gatewayModelOptions(models: string[]) {
   return Array.from(new Set(models.map((model) => model.trim()).filter(Boolean)))
     .sort((left, right) => left.localeCompare(right))
     .map((value) => ({ value, label: value }));
-}
-
-export function canDiscoverGatewayModels(config: Pick<LlmConfig, 'provider' | 'base_url'>): boolean {
-  return config.provider === 'openai_compat' && Boolean(config.base_url?.trim());
 }
 
 interface StorageLocations {
@@ -656,8 +651,6 @@ export const Settings: React.FC<SettingsProps> = ({ status, setStatus, currentUs
         </div>
 
         {currentUser.role === 'admin' && <SystemEnvironmentManager />}
-        {currentUser.role === 'admin' && <TestAccountsPanel canManage />}
-
         {currentUser.role === 'admin' && (
           <div className="p-5 rounded-xl border border-border bg-surface-1/70 space-y-4 glow col-span-full">
             <div className="flex items-start justify-between gap-4 pb-3 border-b border-border">

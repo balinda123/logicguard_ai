@@ -22,6 +22,8 @@ interface RustTestAccount {
   id: string
   displayName: string
   businessRole: BusinessRole
+  roleKey?: string | null
+  roleName?: string | null
   maskedLoginName: string
   credentialRef: string
   loginMode: TestAccount['loginMode']
@@ -126,6 +128,7 @@ interface RustAccountCombination {
 export interface TestAccountInput {
   displayName: string
   role: BusinessRole
+  roleName?: string
   loginMode: TestAccount['loginMode']
   loginConfig: LoginAutomationConfig
 }
@@ -220,7 +223,8 @@ function parseSteps(serialized: string): WorkflowScenarioStep[] {
 function mapTestAccount(account: RustTestAccount): TestAccount {
   return {
     id: account.id,
-    role: account.businessRole,
+    role: account.roleKey || account.businessRole,
+    roleName: account.roleName || account.roleKey || account.businessRole,
     displayName: account.displayName,
     maskedLoginName: account.maskedLoginName,
     credentialRef: account.credentialRef,
@@ -326,11 +330,18 @@ export async function listTestAccounts(): Promise<TestAccount[]> {
   return accounts.map(mapTestAccount)
 }
 
+export async function listScopedTestAccounts(scope: ScopeRef): Promise<TestAccount[]> {
+  const accounts = await invoke<RustTestAccount[]>('list_scoped_test_accounts', { scope })
+  return accounts.map(mapTestAccount)
+}
+
 export async function createTestAccount(input: TestAccountInput): Promise<TestAccount> {
   const account = await invoke<RustTestAccount>('create_test_account', {
     input: {
       displayName: input.displayName,
       businessRole: input.role ?? null,
+      roleKey: input.role,
+      roleName: input.roleName || input.role,
       loginMode: input.loginMode,
       loginConfig: input.loginConfig,
     },
@@ -357,7 +368,25 @@ export async function createScopedTestAccount(input: ScopedTestAccountInput): Pr
   const account = await invoke<RustTestAccount>('create_scoped_test_account', {
     input: {
       scope: { systemId: input.systemId, environmentId: input.environmentId },
-      account: { displayName: input.displayName, businessRole: input.role, loginMode: input.loginMode, loginConfig: input.loginConfig },
+      account: { displayName: input.displayName, businessRole: input.role, roleKey: input.role, roleName: input.roleName || input.role, loginMode: input.loginMode, loginConfig: input.loginConfig },
+    },
+  })
+  return mapTestAccount(account)
+}
+
+export async function updateScopedTestAccount(id: string, scope: ScopeRef, input: TestAccountInput): Promise<TestAccount> {
+  const account = await invoke<RustTestAccount>('update_scoped_test_account', {
+    input: {
+      scope,
+      account: {
+        id,
+        displayName: input.displayName,
+        businessRole: input.role,
+        roleKey: input.role,
+        roleName: input.roleName || input.role,
+        loginMode: input.loginMode,
+        loginConfig: input.loginConfig,
+      },
     },
   })
   return mapTestAccount(account)
@@ -369,6 +398,8 @@ export async function updateTestAccount(id: string, input: TestAccountInput): Pr
       id,
       displayName: input.displayName,
       businessRole: input.role,
+      roleKey: input.role,
+      roleName: input.roleName || input.role,
       loginMode: input.loginMode,
       loginConfig: input.loginConfig,
     },

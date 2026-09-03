@@ -19,7 +19,10 @@ import type {
   TestSystem,
   UpdateEnvironmentInput,
   SaveGenerationCasesInput,
+  DeleteEnvironmentInput,
+  DeleteSystemInput,
   UpdateDesignCaseStatusInput,
+  UpdateDesignTestCaseInput,
   UpdateTestDesignInput,
   UpdateTestSystemInput,
 } from '../types/testDesign'
@@ -80,6 +83,10 @@ export async function updateSystem(input: UpdateTestSystemInput): Promise<TestSy
   return invoke<TestSystem>('update_system', { input })
 }
 
+export async function deleteSystem(input: DeleteSystemInput): Promise<void> {
+  return invoke<void>('delete_system', { input })
+}
+
 export async function listSystemEnvironments(systemId: string): Promise<SystemEnvironment[]> {
   return invoke<SystemEnvironment[]>('list_system_environments', { systemId })
 }
@@ -90,6 +97,10 @@ export async function createSystemEnvironment(input: CreateEnvironmentInput): Pr
 
 export async function updateSystemEnvironment(input: UpdateEnvironmentInput): Promise<SystemEnvironment> {
   return invoke<SystemEnvironment>('update_system_environment', { input })
+}
+
+export async function deleteSystemEnvironment(input: DeleteEnvironmentInput): Promise<void> {
+  return invoke<void>('delete_system_environment', { input })
 }
 
 export async function listTestDesigns(systemId?: string, environmentId?: string): Promise<TestDesign[]> {
@@ -132,6 +143,10 @@ export async function saveGenerationCases(input: SaveGenerationCasesInput): Prom
 
 export async function updateDesignCaseStatus(input: UpdateDesignCaseStatusInput): Promise<DesignTestCaseRecord> {
   return mapDesignTestCase(await invoke<RustDesignTestCase>('update_design_case_status', { input }))
+}
+
+export async function updateDesignTestCase(input: UpdateDesignTestCaseInput): Promise<DesignTestCaseRecord> {
+  return mapDesignTestCase(await invoke<RustDesignTestCase>('update_design_test_case', { input }))
 }
 
 export async function listReviewRecords(designId: string): Promise<ReviewRecord[]> {

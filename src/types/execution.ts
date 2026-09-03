@@ -25,9 +25,12 @@ export interface ExecutionPlan { commands: readonly Record<string, unknown>[] }
 
 export interface ExecutionRunAccountSnapshot {
   id: string
-  role: 'employee' | 'manager' | 'hrbp'
+  role: string
+  roleName: string
+  displayName: string
   loginMode: 'automatic' | 'manual_sso' | 'manual_otp'
   allowedOrigin: string
+  handoffOrigins: readonly string[]
   loginPageUrl: string
   pageLocator?: string
   identityLocator?: string
@@ -41,7 +44,7 @@ export interface ExecutionAccountOrchestrationSnapshot {
   environmentId: string
   combinationId: string
   accounts: readonly ExecutionRunAccountSnapshot[]
-  roleSteps: readonly { commandIndex: number; role: ExecutionRunAccountSnapshot['role']; accountId: string }[]
+  roleSteps: readonly { commandIndex: number; role: string; accountId: string }[]
 }
 
 export interface StartRunInput {
@@ -74,6 +77,39 @@ export interface ExecutionRunEvent {
   kind: string
   data: Readonly<Record<string, unknown>>
   createdAt: string
+}
+
+export type ExecutionIssueStatus =
+  | 'pending_confirmation'
+  | 'pending_fix'
+  | 'pending_validation'
+  | 'closed'
+  | 'not_a_bug'
+
+export interface ExecutionIssue {
+  id: string
+  runId: string
+  status: ExecutionIssueStatus
+  title: string
+  reproductionSteps: string[]
+  expectedResult: string
+  actualResult: string
+  impact: string
+  role?: string
+  systemId?: string
+  environmentId?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface UpdateExecutionIssueInput {
+  id: string
+  title: string
+  reproductionSteps: string[]
+  expectedResult: string
+  actualResult: string
+  impact: string
+  role?: ExecutionIssue['role']
 }
 
 export interface RunUpdatedEvent { run: ExecutionRun }

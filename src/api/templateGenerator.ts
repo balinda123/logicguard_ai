@@ -19,7 +19,7 @@ import { sanitizeForLlm } from '../utils/privacy';
 // ─── Prompt 模板 ──────────────────────────────────────────────────────────────
 
 function buildPrompt(documentText: string, targetUrl: string): string {
-  return `You must preserve business-role handoffs: for a multi-role process, every step has role employee, manager, or hrbp; include each role switch, and keep boundary combinations in variables/description instead of duplicating steps.
+  return `Preserve business-role handoffs using the role names found in the requirement. Never assume a fixed employee/manager/HRBP taxonomy; other systems may define entirely different actors. Keep boundary combinations in variables/description instead of duplicating steps.
 
 你是一名资深的软件 QA 测试开发工程师。请深度分析下方的需求文档，基于 MetaGPT 的 QA 自动化测试用例规范（Test Case Design Specification），对该需求进行结构化分析、场景建模，并生成一份高质量的自动化测试模板。
 
@@ -108,6 +108,142 @@ function extractJson(raw: string): any {
   }
 }
 
+export interface RequirementModel {
+  name: string;
+  summary: string;
+  preconditions: string[];
+  roles: { name: string; responsibilities: string[] }[];
+  stateTransitions: { from: string; to: string; role: string; trigger: string }[];
+  validationRules: { field: string; rule: string; boundaries: string[] }[];
+  scenarios: { name: string; type: 'normal' | 'boundary' | 'exception' | 'workflow'; roles: string[] }[];
+}
+
+function buildRequirementModelPrompt(documentText: string, targetUrl: string): string {
+  return `你是一名资深软件测试分析师。请把需求正文整理成供后续生成测试用例使用的“需求模型”。
+
+本阶段不要生成任何页面点击、输入、选择器、断言或可执行步骤，也不要输出 steps、action、selectorHint 字段。后续系统会结合测试账号和真实页面单独生成操作步骤。
+
+必须保留：
+1. 所有业务角色及职责，尤其是员工、上级、HRBP 等角色之间的交接。
+2. 状态变化、触发动作和执行角色。
+3. 字段必填、长度、保存/提交/退回/终止时机等校验规则。
+4. 最小值前一位、最小值、最大值、最大值后一位、空值和纯空白等边界。
+5. 正常、边界、异常和多角色流程场景，但只写场景目标，不展开操作步骤。
+
+需求正文：
+---
+${documentText}
+---
+目标系统 URL（参考）：${targetUrl || '未知'}
+
+只输出以下 JSON，不要输出 Markdown 或解释：
+{
+  "name": "需求主题，25字以内",
+  "summary": "测试范围和核心业务规则摘要",
+  "preconditions": ["业务前置条件"],
+  "roles": [
+    { "name": "员工", "responsibilities": ["填写并提交目标"] }
+  ],
+  "stateTransitions": [
+    { "from": "草稿", "to": "待上级处理", "role": "员工", "trigger": "正式提交目标" }
+  ],
+  "validationRules": [
+    { "field": "单条目标内容", "rule": "正式提交时去除首尾空白后为10至100字", "boundaries": ["空值", "纯空白", "9字", "10字", "100字", "101字"] }
+  ],
+  "scenarios": [
+    { "name": "员工提交合法目标", "type": "normal", "roles": ["员工"] },
+    { "name": "员工提交后由上级处理并流转至HRBP", "type": "workflow", "roles": ["员工", "上级", "HRBP"] }
+  ]
+}`;
+}
+
+function textArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item ?? '').trim()).filter(Boolean)
+    : [];
+}
+
+function normalizeRequirementModel(raw: unknown): RequirementModel {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  const nested = [source.requirementModel, source.requirement_model, source.model, source.data, source.result]
+    .find((item) => item && typeof item === 'object' && !Array.isArray(item)) as Record<string, unknown> | undefined;
+  const model = nested ?? source;
+  const name = firstText(model, ['name', 'title', '主题', '需求主题']);
+  const summary = firstText(model, ['summary', 'description', '摘要', '需求摘要']);
+  if (!name || !summary) {
+    throw new Error(`AI 返回的需求模型不完整，缺少主题或摘要。已识别字段：${Object.keys(model).slice(0, 12).join('、') || '无'}`);
+  }
+
+  const roles = firstArray(model, ['roles', 'actors', '角色']) ?? [];
+  const transitions = firstArray(model, ['stateTransitions', 'state_transitions', 'transitions', '状态流转']) ?? [];
+  const rules = firstArray(model, ['validationRules', 'validation_rules', 'rules', '校验规则']) ?? [];
+  const scenarios = firstArray(model, ['scenarios', 'coverageScenarios', '场景']) ?? [];
+
+  return {
+    name,
+    summary,
+    preconditions: textArray(model.preconditions ?? model['前置条件']),
+    roles: roles.map((item) => {
+      const role = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      return {
+        name: firstText(role, ['name', 'role', '角色']) ?? String(item ?? '').trim(),
+        responsibilities: textArray(role.responsibilities ?? role.duties ?? role['职责']),
+      };
+    }).filter((item) => item.name),
+    stateTransitions: transitions.map((item) => {
+      const transition = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      return {
+        from: firstText(transition, ['from', 'source', '原状态']) ?? '',
+        to: firstText(transition, ['to', 'target', '目标状态']) ?? '',
+        role: firstText(transition, ['role', 'actor', '角色']) ?? '',
+        trigger: firstText(transition, ['trigger', 'action', '触发动作']) ?? '',
+      };
+    }).filter((item) => item.from || item.to || item.trigger),
+    validationRules: rules.map((item) => {
+      const rule = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      return {
+        field: firstText(rule, ['field', 'name', '字段']) ?? '',
+        rule: firstText(rule, ['rule', 'description', '规则']) ?? String(item ?? '').trim(),
+        boundaries: textArray(rule.boundaries ?? rule.boundaryValues ?? rule['边界值']),
+      };
+    }).filter((item) => item.field || item.rule),
+    scenarios: scenarios.map((item) => {
+      const scenario = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      const rawType = firstText(scenario, ['type', '类型']) ?? 'normal';
+      const type = ['normal', 'boundary', 'exception', 'workflow'].includes(rawType)
+        ? rawType as RequirementModel['scenarios'][number]['type']
+        : 'normal';
+      return {
+        name: firstText(scenario, ['name', 'title', '场景']) ?? String(item ?? '').trim(),
+        type,
+        roles: textArray(scenario.roles ?? scenario.actors ?? scenario['角色']),
+      };
+    }).filter((item) => item.name),
+  };
+}
+
+export async function generateRequirementModelFromDocument(
+  documentText: string,
+  options: GenerateTemplateOptions = {},
+): Promise<RequirementModel> {
+  const { onProgress, targetUrl = '' } = options;
+  if (!documentText.trim()) throw new Error('需求文档内容不能为空');
+  const sanitizedDocument = sanitizeForLlm(documentText.trim());
+  onProgress?.('AI 正在整理角色、规则和场景…');
+  let raw: string;
+  try {
+    raw = await invoke<string>('generate_template', {
+      prompt: sanitizeForLlm(buildRequirementModelPrompt(sanitizedDocument, targetUrl)),
+      config: getLlmConfig(),
+    });
+  } catch (error) {
+    throw new Error(`LLM 调用失败: ${error}`);
+  }
+  return normalizeRequirementModel(extractJson(raw));
+}
+
 // ─── 校验并补全 AI 生成的模板结构 ─────────────────────────────────────────────
 
 function firstText(source: Record<string, unknown>, keys: string[]): string | undefined {
@@ -126,12 +262,8 @@ function firstArray(source: Record<string, unknown>, keys: string[]): unknown[] 
 }
 
 function normalizeBusinessRole(value: unknown): BusinessRole | undefined {
-  const role = String(value ?? '').trim().toLowerCase();
-  if (role === 'employee' || role === 'manager' || role === 'hrbp') return role;
-  if (/员工|employee/.test(role)) return 'employee';
-  if (/上级|主管|经理|manager/.test(role)) return 'manager';
-  if (/hrbp|人力资源/.test(role)) return 'hrbp';
-  return undefined;
+  const role = String(value ?? '').trim();
+  return role ? role.slice(0, 64) : undefined;
 }
 
 function resolveTemplatePayload(raw: unknown): Record<string, unknown> {

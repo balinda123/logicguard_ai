@@ -30,6 +30,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             // 本地报告文件持久化命令
             auth::auth_status,
@@ -46,9 +47,11 @@ pub fn run() {
             test_design::create_system,
             test_design::create_system_with_environment,
             test_design::update_system,
+            test_design::delete_system,
             test_design::list_system_environments,
             test_design::create_system_environment,
             test_design::update_system_environment,
+            test_design::delete_system_environment,
             test_design::list_test_designs,
             test_design::create_test_design,
             test_design::update_test_design,
@@ -59,15 +62,18 @@ pub fn run() {
             test_design::list_design_test_cases,
             test_design::save_generation_cases,
             test_design::update_design_case_status,
+            test_design::update_design_test_case,
             test_design::list_review_records,
             test_design::create_review,
             test_design::get_regression_config,
             test_design::save_regression_config,
             legacy_migration::import_legacy_test_data,
             testing::list_test_accounts,
+            testing::list_scoped_test_accounts,
             testing::create_test_account,
             testing::create_scoped_test_account,
             testing::update_test_account,
+            testing::update_scoped_test_account,
             testing::disable_test_account,
             testing::set_test_account_credential,
             testing::list_account_combinations,
@@ -93,11 +99,16 @@ pub fn run() {
             run_manager::pause_run,
             run_manager::resume_run,
             run_manager::terminate_run,
+            run_manager::delete_run,
             run_manager::get_run,
             run_manager::list_runs,
             run_manager::list_active_runs,
             run_manager::list_run_events,
+            run_manager::list_execution_issues,
+            run_manager::update_execution_issue,
+            run_manager::update_execution_issue_status,
             run_manager::focus_run_browser,
+            run_manager::capture_requirement_page,
             storage::get_storage_locations,
             storage::open_app_data_dir,
             // LLM 大模型相关命令

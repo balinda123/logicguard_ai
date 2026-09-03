@@ -2,8 +2,10 @@ import * as XLSX from 'xlsx'
 
 import type { DefectDraft } from '../types/workflow'
 
+export type ExportableDefect = Omit<DefectDraft, 'scenarioId'> & { scenarioId?: string }
+
 export interface DefectExportItem {
-  draft: DefectDraft
+  draft: ExportableDefect
   evidencePath?: string
 }
 
@@ -51,8 +53,8 @@ export function buildDefectRows(items: DefectExportItem[]): DefectExportRow[] {
     expectedResult: draft.expectedResult,
     actualResult: draft.actualResult,
     impact: draft.impact,
-    role: draft.role ? ROLE_LABEL[draft.role] : '未标记',
-    scenarioId: draft.scenarioId,
+    role: draft.role ? (ROLE_LABEL[draft.role as keyof typeof ROLE_LABEL] || draft.role) : '未标记',
+    scenarioId: draft.scenarioId ?? '自动化运行',
     status: STATUS_LABEL[draft.status],
     createdAt: draft.createdAt,
     evidencePath: safeEvidenceRelativePath(evidencePath),

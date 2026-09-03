@@ -1,4 +1,5 @@
-export type BusinessRole = 'employee' | 'manager' | 'hrbp'
+/** System-defined actor key. Legacy values include employee, manager and hrbp. */
+export type BusinessRole = string
 
 export type LoginMode = 'automatic' | 'manual_sso' | 'manual_otp'
 
@@ -23,6 +24,12 @@ export type DefectStatus =
 export interface ScopeRef {
   systemId: string
   environmentId: string
+}
+
+export interface AccountEnvironmentScope extends ScopeRef {
+  baseUrl: string
+  loginUrl: string
+  handoffOrigins: string[]
 }
 
 export type ScopeState = 'scoped' | 'legacy'
@@ -83,6 +90,8 @@ export interface WorkflowScenario extends ScopedRecord {
 /** Contains only browser field selectors and human-readable login expectations. */
 export interface LoginAutomationConfig {
   loginUrl: string
+  /** Trusted external origins that may host SSO or OTP handoff pages. */
+  handoffOrigins?: string[]
   pageSelector?: string
   usernameSelector?: string
   passwordSelector?: string
@@ -93,6 +102,7 @@ export interface LoginAutomationConfig {
 export interface TestAccount extends ScopedRecord {
   id: string
   role: BusinessRole
+  roleName?: string
   displayName: string
   maskedLoginName: string
   credentialRef: string

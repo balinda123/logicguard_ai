@@ -73,7 +73,7 @@ export function upsertSuite(suite: RegressionSuite): RegressionSuite[] {
 export function createDefaultSuite(moduleName = '人事核心流程'): RegressionSuite {
   return {
     id: `suite_${crypto.randomUUID()}`,
-    name: `${moduleName}回归套件`,
+    name: `${moduleName}测试集合`,
     description: '用于发版前重复验证高频人事流程。',
     module: moduleName,
     caseIds: [],

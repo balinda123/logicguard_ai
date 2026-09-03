@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react'
 
 import {
+  deleteRun,
   getRun,
   listActiveRuns,
   listRunEvents,
@@ -32,6 +33,7 @@ interface ActiveRunContextValue {
   pause: (runId: string) => Promise<void>
   resume: (runId: string) => Promise<void>
   terminate: (runId: string) => Promise<void>
+  remove: (runId: string) => Promise<void>
 }
 
 const ActiveRunContext = createContext<ActiveRunContextValue | undefined>(undefined)
@@ -120,6 +122,21 @@ export function ActiveRunProvider({ children }: { children: ReactNode }) {
     await loadEvents(run.id)
   }, [loadEvents])
 
+  const remove = useCallback(async (runId: string) => {
+    await deleteRun(runId)
+    delete eventSequences.current[runId]
+    setEventsByRun((current) => {
+      const next = { ...current }
+      delete next[runId]
+      return next
+    })
+    setRuns((current) => {
+      const next = current.filter((run) => run.id !== runId)
+      setSelectedRunId((selected) => selected === runId ? next[0]?.id : selected)
+      return next
+    })
+  }, [])
+
   const value = useMemo<ActiveRunContextValue>(() => ({
     runs,
     activeRuns: runs.filter((run) => ACTIVE_STATUSES.has(run.status)),
@@ -134,7 +151,8 @@ export function ActiveRunProvider({ children }: { children: ReactNode }) {
     pause: (runId) => mutate(runId, pauseRun),
     resume: (runId) => mutate(runId, resumeRun),
     terminate: (runId) => mutate(runId, terminateRun),
-  }), [error, eventsByRun, loadRun, loading, mutate, refresh, runs, selectedRunId])
+    remove,
+  }), [error, eventsByRun, loadRun, loading, mutate, refresh, remove, runs, selectedRunId])
 
   return <ActiveRunContext.Provider value={value}>{children}</ActiveRunContext.Provider>
 }

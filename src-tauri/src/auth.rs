@@ -4,7 +4,10 @@ use argon2::{
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::sync::{Mutex, OnceLock};
+use std::{
+    sync::{Mutex, OnceLock},
+    time::Duration,
+};
 use tauri::Manager;
 use uuid::Uuid;
 
@@ -31,25 +34,50 @@ fn session() -> &'static Mutex<Option<SessionUser>> {
     SESSION.get_or_init(|| Mutex::new(None))
 }
 
+fn database_initialization_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn database_initialized() -> &'static OnceLock<()> {
+    static INITIALIZED: OnceLock<()> = OnceLock::new();
+    &INITIALIZED
+}
+
+fn configure_connection(conn: &Connection) -> Result<(), String> {
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA foreign_keys=ON;")
+        .map_err(|e| e.to_string())
+}
+
 pub(crate) fn open_db(app: &tauri::AppHandle) -> Result<Connection, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut conn = Connection::open(dir.join("logicguard.db")).map_err(|e| e.to_string())?;
-    conn.execute_batch(
-        "PRAGMA foreign_keys=ON;
-         CREATE TABLE IF NOT EXISTS users (
-           id TEXT PRIMARY KEY,
-           username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-           password_hash TEXT NOT NULL,
-           role TEXT NOT NULL CHECK(role IN ('admin','user')),
-           disabled INTEGER NOT NULL DEFAULT 0,
-           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-         );",
-    )
-    .map_err(|e| e.to_string())?;
-    crate::testing::initialize_schema(&conn)?;
-    crate::test_design::initialize_schema(&conn)?;
-    crate::test_design::ensure_trial_management_scope(&mut conn)?;
+    configure_connection(&conn)?;
+    if database_initialized().get().is_none() {
+        let _guard = database_initialization_lock()
+            .lock()
+            .map_err(|_| "数据库初始化锁异常".to_string())?;
+        if database_initialized().get().is_none() {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS users (
+                   id TEXT PRIMARY KEY,
+                   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                   password_hash TEXT NOT NULL,
+                   role TEXT NOT NULL CHECK(role IN ('admin','user')),
+                   disabled INTEGER NOT NULL DEFAULT 0,
+                   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                 );",
+            )
+            .map_err(|e| e.to_string())?;
+            crate::testing::initialize_schema(&conn)?;
+            crate::test_design::initialize_schema(&conn)?;
+            crate::test_design::ensure_trial_management_scope(&mut conn)?;
+            let _ = database_initialized().set(());
+        }
+    }
     Ok(conn)
 }
 
@@ -270,4 +298,24 @@ pub fn save_api_key(api_key: String) -> Result<(), String> {
 #[tauri::command]
 pub fn credential_status() -> Result<bool, String> {
     Ok(current_api_key().is_ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn database_connections_wait_for_short_lived_locks() {
+        let conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+
+        let timeout: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        let foreign_keys: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5_000);
+        assert_eq!(foreign_keys, 1);
+    }
 }

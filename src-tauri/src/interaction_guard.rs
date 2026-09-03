@@ -1,6 +1,13 @@
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+#[cfg(target_os = "windows")]
+pub(crate) fn callback_outcome(action: impl FnOnce()) -> i32 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(action))
+        .map(|_| 1)
+        .unwrap_or(0)
+}
+
 pub const LOCK_UNAVAILABLE: &str = "BROWSER_INTERACTION_LOCK_UNAVAILABLE";
 pub(crate) type WindowHandle = isize;
 
@@ -144,8 +151,8 @@ impl<A: WindowAdapter> InteractionGuard for PidWindowGuard<A> {
 
 #[cfg(target_os = "windows")]
 mod platform {
-    use super::{PidWindowGuard, WindowAdapter, WindowHandle, LOCK_UNAVAILABLE};
-    use std::sync::Arc;
+    use super::{callback_outcome, PidWindowGuard, WindowAdapter, WindowHandle, LOCK_UNAVAILABLE};
+    use std::{cell::RefCell, sync::Arc};
     use windows_sys::core::BOOL;
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
@@ -162,32 +169,47 @@ mod platform {
         windows: Vec<WindowHandle>,
     }
 
-    unsafe extern "system" fn enum_window(hwnd: HWND, parameter: LPARAM) -> BOOL {
-        let state = &mut *(parameter as *mut Enumeration);
-        let mut owner_pid = 0;
-        GetWindowThreadProcessId(hwnd, &mut owner_pid);
-        if owner_pid == state.pid && IsWindowVisible(hwnd) != 0 {
-            state.windows.push(hwnd as WindowHandle);
-        }
-        1
+    thread_local! {
+        static ENUMERATION: RefCell<Option<Enumeration>> = const { RefCell::new(None) };
+    }
+
+    unsafe extern "system" fn enum_window(hwnd: HWND, _parameter: LPARAM) -> BOOL {
+        callback_outcome(|| {
+            ENUMERATION.with(|slot| {
+                let mut state = slot.borrow_mut();
+                let Some(state) = state.as_mut() else {
+                    return;
+                };
+                let mut owner_pid = 0u32;
+                unsafe { GetWindowThreadProcessId(hwnd, &mut owner_pid) };
+                if owner_pid == state.pid && unsafe { IsWindowVisible(hwnd) } != 0 {
+                    state.windows.push(hwnd as WindowHandle);
+                }
+            });
+        })
     }
 
     impl WindowAdapter for WindowsApi {
         fn top_level_windows(&self, pid: u32) -> Result<Vec<WindowHandle>, String> {
-            let mut state = Enumeration {
-                pid,
-                windows: Vec::new(),
-            };
-            let enumerated = unsafe {
-                EnumWindows(
-                    Some(enum_window),
-                    (&mut state as *mut Enumeration) as LPARAM,
-                )
-            };
-            if enumerated == 0 {
-                return Err(LOCK_UNAVAILABLE.to_string());
-            }
-            Ok(state.windows)
+            ENUMERATION.with(|slot| {
+                if slot.borrow().is_some() {
+                    return Err(LOCK_UNAVAILABLE.to_string());
+                }
+                *slot.borrow_mut() = Some(Enumeration {
+                    pid,
+                    windows: Vec::new(),
+                });
+                let enumerated = unsafe { EnumWindows(Some(enum_window), 0) };
+                let state = slot
+                    .borrow_mut()
+                    .take()
+                    .ok_or_else(|| LOCK_UNAVAILABLE.to_string())?;
+                if enumerated == 0 {
+                    Err(LOCK_UNAVAILABLE.to_string())
+                } else {
+                    Ok(state.windows)
+                }
+            })
         }
 
         fn set_enabled(&self, hwnd: WindowHandle, enabled: bool) -> Result<(), String> {
